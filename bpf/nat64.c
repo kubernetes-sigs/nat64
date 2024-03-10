@@ -70,13 +70,6 @@ int nat64(struct __sk_buff* skb)
 
 	bpf_printk("NAT64 IPv6 packet: saddr: %pI6, daddr: %pI6", &ip6->saddr, &ip6->daddr);
 
-	// Save L2 header we got from the input packet before any packet
-	// modifications. We will copy it later to the output packet.
-	struct ethhdr old_eth;
-	old_eth = *eth;
-	// Replace the ethertype for a correct one for IPv4 packet.
-	old_eth.h_proto = bpf_htons(ETH_P_IP);
-
 	// Build source ip, last byte of the ipv6 address plus the prefix.
 	// 169.254.64.xxx
 	__u32 new_src = bpf_htonl(0xA9FE4000 + (bpf_ntohl(ip6->saddr.in6_u.u6_addr32[3]) & 0x000000FF));
@@ -163,6 +156,13 @@ int nat64(struct __sk_buff* skb)
 			// call using 2 * size of IP address.
 			l4_csum_diff = bpf_csum_diff((void *)&(ip6->saddr), 2*sizeof(struct in6_addr), (void *)&(ip4.saddr), 2*sizeof(__u32), 0);
 	}
+
+	// Save L2 header we got from the input packet before any packet
+	// modifications. We will copy it later to the output packet.
+	struct ethhdr old_eth;
+	old_eth = *eth;
+	// Replace the ethertype for a correct one for IPv4 packet.
+	old_eth.h_proto = bpf_htons(ETH_P_IP);
 
 	// Packet mutations begin - point of no return, but if this first modification fails
 	// the packet is probably still pristine, so let clatd handle it.
@@ -260,22 +260,8 @@ static __always_inline int nat46(struct __sk_buff *skb)
 	// packet's data are called, because verifier will invalidate
 	// all packet pointers.
 	__u64 l4_csum_diff = 0;
-	// Move declarations outside of switch case since declaration
-	// as first instruction in case is illegal in C.
-	const struct udphdr *uh;
 	switch (ip6.nexthdr) {
 		case IPPROTO_UDP:
-			uh = (const struct udphdr *)(ip4 + 1);
-			// If IPv4/UDP checksum is 0 then fallback to clatd so it can calculate the
-			// checksum. Otherwise the network or more likely the NAT64 gateway might
-			// drop the packet because in most cases IPv6/UDP packets with a zero checksum
-			// are invalid. See RFC 6935.
-			if (!uh->check) {
-				bpf_printk("NAT46 packet forwarded: UDP checksum is 0");
-				return TC_ACT_OK;
-			}
-			// If checksum is not 0, recalculate with bpf_csum_diff.
-			// Fallthrough to the next case.
 		case IPPROTO_TCP:
 			// See comment for nat64 direction to see reasoning behind this.
 			l4_csum_diff = bpf_csum_diff((void *)&(ip4->saddr), 2*sizeof(__u32), (void *)&(ip6.saddr), 2*sizeof(struct in6_addr), 0);
@@ -288,12 +274,6 @@ static __always_inline int nat46(struct __sk_buff *skb)
 	// Replace the ethertype for a correct one for IPv6 packet.
 	old_eth.h_proto = bpf_htons(ETH_P_IPV6);
 
-	// Calculate the IPv6 16-bit one's complement checksum of the IPv6 header.
-	__wsum sum6 = 0;
-	// We'll end up with a non-zero sum due to ip6.version == 6
-	for (uint i = 0; i < sizeof(ip6) / sizeof(__u16); ++i)
-		sum6 += ((__u16 *)&ip6)[i];
-
 	// Packet mutations begin - point of no return, but if this first modification fails
 	// the packet is probably still pristine, so let clatd handle it.
 	// This also takes care of resizing socket buffer to handle different IP
@@ -303,16 +283,15 @@ static __always_inline int nat46(struct __sk_buff *skb)
 		return TC_ACT_OK;
 	}
 
-	bpf_csum_update(skb, sum6);
-
 	// Update L4 checksum using the checksum difference we calculated before.
 	int ret = 0;
 	switch (ip6.nexthdr) {
 		case IPPROTO_UDP:
-//			ret = bpf_l4_csum_replace(skb, UDP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR);
+			ret = bpf_l4_csum_replace(skb, UDP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR);
 			break;
 		case IPPROTO_TCP:
 			ret = bpf_l4_csum_replace(skb, TCP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR);
+			break;
 	}
 
 	// If true, updating packet's UDP / TCP checksum failed.
@@ -338,7 +317,7 @@ static __always_inline int nat46(struct __sk_buff *skb)
 	}
 	// Copy over the new ipv6 header.
 	// This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE packet.
-	ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip6, sizeof(struct ipv6hdr), 0);
+	ret = bpf_skb_store_bytes(skb, sizeof(struct ethhdr), &ip6, sizeof(struct ipv6hdr), BPF_F_RECOMPUTE_CSUM);
 	if (ret < 0) {
 		bpf_printk("NAT46 packet dropped: copy ipv6 header + csum recompute");
 		return TC_ACT_SHOT;
@@ -440,15 +419,15 @@ nat46_valid(const struct __sk_buff *skb) {
 
 	// For a correct checksum we should get *a* zero, but sum4 must be positive, ie 0xFFFF
 	if (sum4 != 0xFFFF)
-		return TC_ACT_OK;
+		return false;
 
 	// Minimum IPv4 total length is the size of the header
 	if (bpf_ntohs(ip4->tot_len) < sizeof(*ip4))
-		return TC_ACT_OK;
+		return false;
 
 	// We are incapable of dealing with IPv4 fragments
 	if (ip4->frag_off & ~bpf_htons(IP_DF))
-		return TC_ACT_OK;
+		return false;
 
 	// Must be L4 protocol we can support.
 	// TODO: Add support for ICMPv6.
@@ -461,17 +440,9 @@ nat46_valid(const struct __sk_buff *skb) {
 				return false;
 			break;
 		case IPPROTO_UDP:
+			// Must have UDP header.
 			if (data + sizeof(struct ethhdr) + sizeof(struct iphdr) + sizeof(struct udphdr) > data_end)
 				return false;
-			const struct udphdr *uh = (const struct udphdr *)(ip4 + 1);
-			// If IPv4/UDP checksum is 0 then fallback to clatd so it can calculate the
-			// checksum.  Otherwise the network or more likely the NAT64 gateway might
-			// drop the packet because in most cases IPv6/UDP packets with a zero checksum
-			// are invalid. See RFC 6935.
-			// TODO: calculate checksum via bpf_csum_diff().
-			if (!uh->check)
-				return false;
-
 			break;
 		default:  // do not know how to handle anything else
 			return false;
