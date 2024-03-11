@@ -46,6 +46,9 @@
 *.idb
 *.pdb
 
+# Network capture
+*.pcap
+
 # Kernel Module Compile Results
 *.mod*
 *.cmd
