@@ -177,7 +177,7 @@ int nat64(struct __sk_buff* skb)
 	int ret = 0;
 	switch (ip4.protocol) {
 		case IPPROTO_UDP:
-			ret = bpf_l4_csum_replace(skb, UDP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR);
+			ret = bpf_l4_csum_replace(skb, UDP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0);
 			break;
 		case IPPROTO_TCP:
 			ret = bpf_l4_csum_replace(skb, TCP_CSUM_OFF, 0, l4_csum_diff, BPF_F_PSEUDO_HDR);
