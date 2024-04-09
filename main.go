@@ -137,9 +137,6 @@ func main() {
 		}
 	}
 
-	ticker := time.NewTicker(reconcilePeriod)
-	defer ticker.Stop()
-
 	// Install iptables rule to masquerade IPv4 NAT64 traffic
 	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
 	if err != nil {
@@ -151,17 +148,20 @@ func main() {
 		log.Fatalf("Could not use iptables IPv6: %v", err)
 	}
 
+	ticker := time.NewTicker(reconcilePeriod)
+	defer ticker.Stop()
+
 	// sync iptables rules
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
 		log.Println("syncing iptables rules ...")
 		err = syncIptablesRules(ipt4, ipt6)
 		if err != nil {
 			log.Printf("error syncing iptables rules: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}()
 
