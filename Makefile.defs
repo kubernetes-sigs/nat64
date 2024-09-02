@@ -1,0 +1,12 @@
+SHELL := /usr/bin/env bash
+.SHELLFLAGS := -eu -o pipefail -c
+
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+RELATIVE_DIR := $(shell echo $(realpath .) | sed "s;$(ROOT_DIR)[/]*;;")
+
+CONTAINER_ENGINE?=docker
+DOCKER_FLAGS?=
+DOCKER_BUILD_FLAGS?=
+
+export GO ?= go
+

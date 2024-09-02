@@ -4,7 +4,8 @@ FROM ubuntu:22.04 AS ebpf-builder
 WORKDIR /go/src/app
 RUN apt-get update && apt-get -y install clang llvm
 COPY ./bpf ./bpf
-RUN clang -target bpf -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.o
+# TODO: make it so that we only build this in Makefile and just copy object files here
+RUN clang -target bpf -I ./bpf/include -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.o
 
 FROM golang:1.22 AS builder
 # golang envs

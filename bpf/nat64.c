@@ -15,10 +15,21 @@
  * limitations under the License.
  */
 
-#include "headers/vmlinux.h"
-#include "headers/bpf_endian.h"
-#include "headers/bpf_helpers.h"
-#include "headers/bpf_tracing.h"
+#include <linux/types.h>
+#include <linux/byteorder.h>
+#include <linux/bpf.h>
+
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/ip6.h>
+#include <linux/icmp.h>
+#include <linux/icmpv6.h>
+#include <linux/udp.h>
+#include <linux/tcp.h>
+
+#include <bpf/bpf_endian.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 #define TC_ACT_OK  0
 #define TC_ACT_SHOT		2
@@ -47,121 +58,6 @@
 
 // From kernel:include/uapi/asm/errno.h
 #define ENOTSUP		252	/* Function not implemented (POSIX.4 / HPUX) */
-
-// From kernel:include/uapi/linux/icmpv6.h
-#define icmp6_identifier	icmp6_dataun.u_echo.identifier
-#define icmp6_sequence		icmp6_dataun.u_echo.sequence
-#define icmp6_pointer		icmp6_dataun.un_data32[0]
-#define icmp6_mtu		icmp6_dataun.un_data32[0]
-#define icmp6_unused		icmp6_dataun.un_data32[0]
-#define icmp6_maxdelay		icmp6_dataun.un_data16[0]
-#define icmp6_router		icmp6_dataun.u_nd_advt.router
-#define icmp6_solicited		icmp6_dataun.u_nd_advt.solicited
-#define icmp6_override		icmp6_dataun.u_nd_advt.override
-#define icmp6_ndiscreserved	icmp6_dataun.u_nd_advt.reserved
-#define icmp6_hop_limit		icmp6_dataun.u_nd_ra.hop_limit
-#define icmp6_addrconf_managed	icmp6_dataun.u_nd_ra.managed
-#define icmp6_addrconf_other	icmp6_dataun.u_nd_ra.other
-#define icmp6_rt_lifetime	icmp6_dataun.u_nd_ra.rt_lifetime
-#define icmp6_router_pref	icmp6_dataun.u_nd_ra.router_pref
-
-#define ICMPV6_ROUTER_PREF_LOW		0x3
-#define ICMPV6_ROUTER_PREF_MEDIUM	0x0
-#define ICMPV6_ROUTER_PREF_HIGH		0x1
-#define ICMPV6_ROUTER_PREF_INVALID	0x2
-
-#define ICMPV6_DEST_UNREACH		1
-#define ICMPV6_PKT_TOOBIG		2
-#define ICMPV6_TIME_EXCEED		3
-#define ICMPV6_PARAMPROB		4
-
-#define ICMPV6_INFOMSG_MASK		0x80
-
-#define ICMPV6_ECHO_REQUEST		128
-#define ICMPV6_ECHO_REPLY		129
-#define ICMPV6_MGM_QUERY		130
-#define ICMPV6_MGM_REPORT       	131
-#define ICMPV6_MGM_REDUCTION    	132
-
-#define ICMPV6_NI_QUERY			139
-#define ICMPV6_NI_REPLY			140
-
-#define ICMPV6_MLD2_REPORT		143
-
-#define ICMPV6_DHAAD_REQUEST		144
-#define ICMPV6_DHAAD_REPLY		145
-#define ICMPV6_MOBILE_PREFIX_SOL	146
-#define ICMPV6_MOBILE_PREFIX_ADV	147
-
-/*
- *	Codes for Destination Unreachable
- */
-#define ICMPV6_NOROUTE			0
-#define ICMPV6_ADM_PROHIBITED		1
-#define ICMPV6_NOT_NEIGHBOUR		2
-#define ICMPV6_ADDR_UNREACH		3
-#define ICMPV6_PORT_UNREACH		4
-#define ICMPV6_POLICY_FAIL		5
-#define ICMPV6_REJECT_ROUTE		6
-
-/*
- *	Codes for Time Exceeded
- */
-#define ICMPV6_EXC_HOPLIMIT		0
-#define ICMPV6_EXC_FRAGTIME		1
-
-/*
- *	Codes for Parameter Problem
- */
-#define ICMPV6_HDR_FIELD		0
-#define ICMPV6_UNK_NEXTHDR		1
-#define ICMPV6_UNK_OPTION		2
-
-// From kernel:include/uapi/linux/icmp.h
-#define ICMP_ECHOREPLY		0	/* Echo Reply			*/
-#define ICMP_DEST_UNREACH	3	/* Destination Unreachable	*/
-#define ICMP_SOURCE_QUENCH	4	/* Source Quench		*/
-#define ICMP_REDIRECT		5	/* Redirect (change route)	*/
-#define ICMP_ECHO		8	/* Echo Request			*/
-#define ICMP_TIME_EXCEEDED	11	/* Time Exceeded		*/
-#define ICMP_PARAMETERPROB	12	/* Parameter Problem		*/
-#define ICMP_TIMESTAMP		13	/* Timestamp Request		*/
-#define ICMP_TIMESTAMPREPLY	14	/* Timestamp Reply		*/
-#define ICMP_INFO_REQUEST	15	/* Information Request		*/
-#define ICMP_INFO_REPLY		16	/* Information Reply		*/
-#define ICMP_ADDRESS		17	/* Address Mask Request		*/
-#define ICMP_ADDRESSREPLY	18	/* Address Mask Reply		*/
-#define NR_ICMP_TYPES		18
-
-
-/* Codes for UNREACH. */
-#define ICMP_NET_UNREACH	0	/* Network Unreachable		*/
-#define ICMP_HOST_UNREACH	1	/* Host Unreachable		*/
-#define ICMP_PROT_UNREACH	2	/* Protocol Unreachable		*/
-#define ICMP_PORT_UNREACH	3	/* Port Unreachable		*/
-#define ICMP_FRAG_NEEDED	4	/* Fragmentation Needed/DF set	*/
-#define ICMP_SR_FAILED		5	/* Source Route failed		*/
-#define ICMP_NET_UNKNOWN	6
-#define ICMP_HOST_UNKNOWN	7
-#define ICMP_HOST_ISOLATED	8
-#define ICMP_NET_ANO		9
-#define ICMP_HOST_ANO		10
-#define ICMP_NET_UNR_TOS	11
-#define ICMP_HOST_UNR_TOS	12
-#define ICMP_PKT_FILTERED	13	/* Packet filtered */
-#define ICMP_PREC_VIOLATION	14	/* Precedence violation */
-#define ICMP_PREC_CUTOFF	15	/* Precedence cut off */
-#define NR_ICMP_UNREACH		15	/* instead of hardcoding immediate value */
-
-/* Codes for REDIRECT. */
-#define ICMP_REDIR_NET		0	/* Redirect Net			*/
-#define ICMP_REDIR_HOST		1	/* Redirect Host		*/
-#define ICMP_REDIR_NETTOS	2	/* Redirect Net for TOS		*/
-#define ICMP_REDIR_HOSTTOS	3	/* Redirect Host for TOS	*/
-
-/* Codes for TIME_EXCEEDED. */
-#define ICMP_EXC_TTL		0	/* TTL count exceeded		*/
-#define ICMP_EXC_FRAGTIME	1	/* Fragment Reass time exceeded	*/
 
 /* Declare BPF maps */
 
@@ -206,13 +102,13 @@ int nat64(struct __sk_buff* skb)
 	// is the least trivial part.
 	__be16 tot_len = bpf_htons(bpf_ntohs(ip6->payload_len) + sizeof(struct iphdr));
 	struct iphdr ip4 = {
-		.version = 4,                                           // u4
-		.ihl = sizeof(struct iphdr) / sizeof(__u32),            // u4
-		.tos = (ip6->priority << 4) + (ip6->flow_lbl[0] >> 4),  // u8
-		.tot_len = tot_len,                                     // u16
-		.id = 0,                                                // u16
-		.check = 0,                                             // u16
-		.frag_off = 0,                                          // u16
+		.version = 4,                                                   // u4
+		.ihl = sizeof(struct iphdr) / sizeof(__u32),                    // u4
+		.tos = (__u8)((ip6->priority << 4) + (ip6->flow_lbl[0] >> 4)),  // u8
+		.tot_len = tot_len,                                             // u16
+		.id = 0,                                                        // u16
+		.check = 0,                                                     // u16
+		.frag_off = 0,                                                  // u16
 	};
 
 	// For whatever cursed reason, verifier is unhappy if these are part
@@ -229,7 +125,7 @@ int nat64(struct __sk_buff* skb)
 
 	// Calculate the IPv4 one's complement checksum of the IPv4 header.
 	__wsum sum4 = 0;
-	for (int i = 0; i < sizeof(struct iphdr) / sizeof(__u16); ++i) {
+	for (size_t i = 0; i < sizeof(struct iphdr) / sizeof(__u16); ++i) {
 		sum4 += ((__u16*)&ip4)[i];
 	}
 	// Note that sum4 is guaranteed to be non-zero by virtue of ip.version == 4
@@ -241,7 +137,7 @@ int nat64(struct __sk_buff* skb)
 	__wsum icmp_csum_diff = 0;
 	// Initialize header to all zeroes.
 	__u16 *p = (void *)&icmp4;
-	for (int i = 0; i < sizeof(struct icmphdr) / sizeof(__u16); ++i) {
+	for (size_t i = 0; i < sizeof(struct icmphdr) / sizeof(__u16); ++i) {
 		p[i] = 0;
 	}
 	if (ip4.protocol == IPPROTO_ICMP) {
@@ -496,7 +392,7 @@ static __always_inline int nat46(struct __sk_buff *skb)
 	struct ipv6hdr ip6 = {
 		.version = 6,                                            // __u8:4
 		.priority = ip4->tos >> 4,                               // __u8:4
-		.flow_lbl = {(ip4->tos & 0xF) << 4, 0, 0},               // __u8[3]
+		.flow_lbl = {(__u8)((ip4->tos & 0xF) << 4), 0, 0},       // __u8[3]
 		.payload_len = bpf_htons(bpf_ntohs(ip4->tot_len) - 20),  // __be16
 		.hop_limit = ip4->ttl,                                   // __u8
 	};
@@ -515,7 +411,7 @@ static __always_inline int nat46(struct __sk_buff *skb)
 	__wsum icmp6_csum_diff = 0;
 	// Initialize header to all zeroes.
 	__u16 *p = (void *)&icmp6;
-	for (int i = 0; i < sizeof(struct icmp6hdr) / sizeof(__u16); ++i) {
+	for (size_t i = 0; i < sizeof(struct icmp6hdr) / sizeof(__u16); ++i) {
 		p[i] = 0;
 	}
 	if (ip6.nexthdr == IPPROTO_ICMPV6) {
@@ -809,7 +705,7 @@ nat46_valid(const struct __sk_buff *skb) {
 
 	// Calculate the IPv4 one's complement checksum of the IPv4 header.
 	__wsum sum4 = 0;
-	for (uint i = 0; i < sizeof(*ip4) / sizeof(__u16); ++i)
+	for (size_t i = 0; i < sizeof(*ip4) / sizeof(__u16); ++i)
 		sum4 += ((__u16 *)ip4)[i];
 
 	// Note that sum4 is guaranteed to be non-zero by virtue of ip4->version == 4
