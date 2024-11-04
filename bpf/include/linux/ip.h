@@ -21,6 +21,8 @@
 #include <linux/types.h>
 #include <linux/in.h>
 
+/* From: uapi/linux/ip.h */
+
 #define IPTOS_TOS_MASK		0x1E
 #define IPTOS_TOS(tos)		((tos)&IPTOS_TOS_MASK)
 #define	IPTOS_LOWDELAY		0x10
@@ -134,3 +136,13 @@ struct ip_beet_phdr {
 	__u8 padlen;
 	__u8 reserved;
 };
+
+/* From: include/net/ip.h */
+
+/* IP flags. */
+#define IP_CE		0x8000		/* Flag: "Congestion"		*/
+#define IP_DF		0x4000		/* Flag: "Don't Fragment"	*/
+#define IP_MF		0x2000		/* Flag: "More Fragments"	*/
+#define IP_OFFSET	0x1FFF		/* "Fragment Offset" part	*/
+
+#define IP_FRAG_TIME	(30 * HZ)		/* fragment lifetime	*/
