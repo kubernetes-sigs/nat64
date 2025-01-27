@@ -1,8 +1,3 @@
-# ARCHIVED
-
-# DEVELOPMENT MOVED TO https://github.com/kubernetes-sigs/nat64
-
-
 # nat64
 
 NAT64 implementation for Kubernetes deployments (mainly)
