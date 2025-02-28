@@ -21,6 +21,7 @@ limitations under the License.
 #include <linux/bpf.h>
 #include <linux/types.h>
 
+#include <lib/config.h>
 #include <lib/csum.h>
 #include <lib/icmp.h>
 
@@ -226,11 +227,11 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 
 	// Use container subnet here for dst address. Pod prefix is used for the
 	// last byte.
-	// TODO: make container subnet configurable, right now it's hardcoded.
-	dst_addr = bpf_ntohl(ip4.daddr) & 0x000000FF;
-	ip6.daddr.in6_u.u6_addr32[0] = bpf_htonl(0xfd000010);
-	ip6.daddr.in6_u.u6_addr32[1] = bpf_htonl(0x02440001);
-	ip6.daddr.in6_u.u6_addr32[2] = 0;
+	// TODO: make this configurable how many bytes are actually used
+	dst_addr = (POD_PREFIX_3 & POD_MASK_3) | (bpf_ntohl(ip4.daddr) & (~POD_MASK_3));
+	ip6.daddr.in6_u.u6_addr32[0] = bpf_htonl(POD_PREFIX_0);
+	ip6.daddr.in6_u.u6_addr32[1] = bpf_htonl(POD_PREFIX_1);
+	ip6.daddr.in6_u.u6_addr32[2] = bpf_htonl(POD_PREFIX_2);
 	ip6.daddr.in6_u.u6_addr32[3] = bpf_htonl(dst_addr);
 
 	// This also takes care of resizing socket buffer to handle different IP
@@ -304,9 +305,10 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 //       on the node. Future work would be to remove this limit by supporting
 //       stateful src IP assignment.
 static __always_inline __u32 ip4_new_saddr(struct ipv6hdr *ip6) {
-	// Build source ip, last byte of the ipv6 address plus the prefix.
-	// 169.254.64.xxx
-	__u32 new_src = bpf_htonl(0xA9FE4000 + (bpf_ntohl(ip6->saddr.in6_u.u6_addr32[3]) & 0x000000FF));
+	// Build source ip, save variable bytes of the ipv6 address plus the prefix.
+	// 198.18.xxx.xxx
+	__u32 mask = 0x0000FFFF & (~POD_MASK_3);
+	__u32 new_src = bpf_htonl(0xC6120000 + (bpf_ntohl(ip6->saddr.in6_u.u6_addr32[3]) & mask));
 
 	return new_src;
 }

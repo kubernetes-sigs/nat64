@@ -34,6 +34,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/kubernetes"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
+	toolswatch "k8s.io/client-go/tools/watch"
 )
 
 // Stateful implementation of NAT64 based in two stages using a dummy interface.
@@ -45,9 +56,10 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU     = 1500
-	bpfProgram      = "bpf/nat64.o"
-	reconcilePeriod = 5 * time.Minute
+	originalMTU               = 1500
+	bpfProgram                = "bpf/nat64.o"
+	reconcilePeriod           = 5 * time.Minute
+	widestPodCIDRRangeAllowed = 112
 )
 
 var (
@@ -56,16 +68,18 @@ var (
 	natV6Range         string
 	nat64If            string
 	podCIDR            string
+	hostname           string
 
 	gwIface string
 )
 
 func init() {
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0.0.0.0:8881", "The IP address and port for the metrics server to serve on, default 0.0.0.0:8881")
-	flag.StringVar(&natV4Range, "nat-v4-cidr", "169.254.64.0/24", "The IPv4 CIDR used to source NAT the NAT64 addresses")
+	flag.StringVar(&natV4Range, "nat-v4-cidr", "198.18.0.0/16", "The IPv4 CIDR used to source NAT the NAT64 addresses")
 	flag.StringVar(&natV6Range, "nat-v6-cidr", "64:ff9b::/96", "The IPv6 CIDR used for IPv4-Embedded IPv6 Address Prefix, default 64:ff9b::/96 (rfc6052)")
 	flag.StringVar(&nat64If, "iface", "nat64", "The name of the interfaces created in the system to implement NAT64")
 	flag.StringVar(&podCIDR, "source-cidr", "", "The subnet used to set the source range to NAT64, by default all traffic using the nat64 prefix is allowed")
+	flag.StringVar(&hostname, "hostname", "", "Node hostname")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: nat64 [options]\n\n")
@@ -79,12 +93,12 @@ func main() {
 
 	_, _, err := net.SplitHostPort(metricsBindAddress)
 	if err != nil {
-		log.Fatalf("Wrong metrics-bind-address %s : %v", metricsBindAddress, err)
+		log.Fatalf("Wrong metrics-bind-address %s: %v", metricsBindAddress, err)
 	}
 
 	v4ip, v4net, err := net.ParseCIDR(natV4Range)
 	if err != nil {
-		log.Fatalf("Wrong nat-v4-cidr %s : %v", natV4Range, err)
+		log.Fatalf("Wrong nat-v4-cidr %s: %v", natV4Range, err)
 	}
 
 	routes, err := netlink.RouteGet(v4ip)
@@ -98,7 +112,7 @@ func main() {
 
 	v6ip, v6net, err := net.ParseCIDR(natV6Range)
 	if err != nil {
-		log.Fatalf("Wrong nat-v6-cidr %s : %v", natV6Range, err)
+		log.Fatalf("Wrong nat-v6-cidr %s: %v", natV6Range, err)
 	}
 
 	routes, err = netlink.RouteGet(v6ip)
@@ -108,6 +122,42 @@ func main() {
 	// TODO: do not consider the default route
 	if len(routes) > 1 {
 		log.Printf("Overlapping routes %v with the range %s", routes, natV4Range)
+	}
+
+	if hostname == "" {
+		hostname, err = os.Hostname()
+		if err != nil {
+			log.Fatalf("Cannot fetch os.Hostname: %v", err)
+		}
+		log.Printf("No hostname specified, using os.Hostname: %s", hostname)
+	}
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatalf("Cannot fetch cluster config: %v", err)
+	}
+	k8sClient, err := kubernetes.NewForConfig(config)
+
+	if len(podCIDR) == 0 {
+		log.Printf("Watching for node, awaiting podCIDR allocation")
+		ctx := context.Background()
+		node, err := waitForPodCIDR(ctx, k8sClient, hostname)
+		if err != nil {
+			log.Fatalf("waitForPodCIDR: %v", err)
+		}
+		// take podCIDR from primary IP family configured for the cluster
+		podCIDR = node.Spec.PodCIDRs[0]
+		log.Printf("podCIDR: %s", podCIDR)
+	}
+
+	_, _, podMaskSize, err := parsePodCIDR(podCIDR)
+	if err != nil {
+		log.Fatalf("Wrong pod CIDR %s: %v", podCIDR, err)
+	}
+	// TODO: it's fixed to /112 now because IPv4 range for source addresses for NAT is hardcoded
+	//       right now, this will be later changed to depend on the size of that range once it's configurable
+	if podMaskSize < widestPodCIDRRangeAllowed {
+		log.Fatalf("Mask for pod CIDR must be /120 or narrower to avoid source address collision for NAT64: %s", podCIDR)
 	}
 
 	// Obtain the interface with the default route for IPv4 so we can masquerade the traffic
@@ -257,7 +307,7 @@ func sync(v4net, v6net *net.IPNet) error {
 		QdiscType: "clsact",
 	}
 	if err = netlink.QdiscReplace(qdisc); err != nil {
-		return fmt.Errorf("failed to replace qdisc: %v", err)
+		return fmt.Errorf("failed to replace qdisc: %w", err)
 	}
 
 	// Add eBPF code to the TC of the nat64 interface
@@ -270,18 +320,33 @@ func sync(v4net, v6net *net.IPNet) error {
 		log.Printf("eBPF program spec section %s name %s", prog.SectionName, prog.Name)
 	}
 
-	/* TODO rewrite the eBPF program networks
+	podPrefix, podMask, _, err := parsePodCIDR(podCIDR)
+	if err != nil {
+		return fmt.Errorf("Invalid pod CIDR %s: %w", podCIDR, err)
+	}
+	if len(podPrefix) != 4 {
+		panic("Implementation error: parsed pod prefix slice should have length 4, please report this bug")
+	}
+	if len(podMask) != 4 {
+		panic("Implementation error: parsed pod mask slice should have length 4, please report this bug")
+	}
+
+	log.Printf("%s %x %x %x %x %x %x %x %x\n", podCIDR, podPrefix[0], podPrefix[1], podPrefix[2], podPrefix[3], podMask[0], podMask[1], podMask[2], podMask[3])
 	err = spec.RewriteConstants(map[string]interface{}{
-		"NAT64_PREFIX": uint32(transportProtocolNumber),
-		"NAT46_PREFIX": uint32(family),
-		"POD_PREFIX_0":,
-		"POD_PREFIX_1":,
-		"POD_PREFIX_2":,
+		//		"NAT64_PREFIX": uint32(transportProtocolNumber),
+		//		"NAT46_PREFIX": uint32(family),
+		"POD_PREFIX_0": podPrefix[0],
+		"POD_PREFIX_1": podPrefix[1],
+		"POD_PREFIX_2": podPrefix[2],
+		"POD_PREFIX_3": podPrefix[3],
+		"POD_MASK_0":   podMask[0],
+		"POD_MASK_1":   podMask[1],
+		"POD_MASK_2":   podMask[2],
+		"POD_MASK_3":   podMask[3],
 	})
 	if err != nil {
-		return fmt.Errorf("Error rewriting eBPF program: %v", err)
+		return fmt.Errorf("Error rewriting eBPF program: %w", err)
 	}
-	*/
 
 	// Instantiate a Collection from a CollectionSpec.
 	coll, err := ebpf.NewCollection(spec)
@@ -425,4 +490,83 @@ func getDefaultGwIf() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("not routes found")
+}
+
+func waitForPodCIDR(ctx context.Context, client clientset.Interface, nodeName string) (*v1.Node, error) {
+	// since allocators can assign the podCIDR after the node registers, we do a watch here to wait
+	// for podCIDR to be assigned, instead of assuming that the Get() on startup will have it.
+	ctx, cancelFunc := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancelFunc()
+
+	fieldSelector := fields.OneTermEqualSelector("metadata.name", nodeName).String()
+	lw := &cache.ListWatch{
+		ListFunc: func(options metav1.ListOptions) (object runtime.Object, e error) {
+			options.FieldSelector = fieldSelector
+			return client.CoreV1().Nodes().List(ctx, options)
+		},
+		WatchFunc: func(options metav1.ListOptions) (i watch.Interface, e error) {
+			options.FieldSelector = fieldSelector
+			return client.CoreV1().Nodes().Watch(ctx, options)
+		},
+	}
+	condition := func(event watch.Event) (bool, error) {
+		// don't process delete events
+		if event.Type != watch.Modified && event.Type != watch.Added {
+			return false, nil
+		}
+
+		n, ok := event.Object.(*v1.Node)
+		if !ok {
+			return false, fmt.Errorf("event object not of type Node")
+		}
+		// don't consider the node if is going to be deleted and keep waiting
+		if !n.DeletionTimestamp.IsZero() {
+			return false, nil
+		}
+		return n.Spec.PodCIDR != "" && len(n.Spec.PodCIDRs) > 0, nil
+	}
+
+	evt, err := toolswatch.UntilWithSync(ctx, lw, &v1.Node{}, nil, condition)
+	if err != nil {
+		return nil, fmt.Errorf("timeout waiting for PodCIDR allocation: %v", err)
+	}
+	if n, ok := evt.Object.(*v1.Node); ok {
+		return n, nil
+	}
+	return nil, fmt.Errorf("event object not of type node")
+}
+
+// parse pod CIDR to the format that will be useful to BPF code
+func parsePodCIDR(podCIDR string) (podNetBytes []uint32, podMaskBytes []uint32, podMaskSize uint32, err error) {
+	ipv6Addr, ipv6Net, err := net.ParseCIDR(podCIDR)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("net.ParseCIDR: %w", err)
+	}
+	if ipv6Addr.To4() != nil {
+		return nil, nil, 0, fmt.Errorf("podCIDR is required to be IPv6 CIDR: %s", podCIDR)
+	}
+
+	u1 := foldToUint32OrDie(ipv6Net.IP[0:4])
+	u2 := foldToUint32OrDie(ipv6Net.IP[4:8])
+	u3 := foldToUint32OrDie(ipv6Net.IP[8:12])
+	u4 := foldToUint32OrDie(ipv6Net.IP[12:16])
+	podNetBytes = []uint32{u1, u2, u3, u4}
+
+	m1 := foldToUint32OrDie(ipv6Net.Mask[0:4])
+	m2 := foldToUint32OrDie(ipv6Net.Mask[4:8])
+	m3 := foldToUint32OrDie(ipv6Net.Mask[8:12])
+	m4 := foldToUint32OrDie(ipv6Net.Mask[12:16])
+	podMaskBytes = []uint32{m1, m2, m3, m4}
+
+	maskSize, _ := ipv6Net.Mask.Size()
+	return podNetBytes, podMaskBytes, uint32(maskSize), nil
+}
+
+// convert byte slice to uint32
+// example: foldToUint32OrDie([]byte{0x20, 0x01, 0xd1, 0x80}) == uint32(0x20010db8)
+func foldToUint32OrDie(b []byte) uint32 {
+	if len(b) != 4 {
+		panic("cannot fold to uint32, byte slice of length 4 required")
+	}
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
