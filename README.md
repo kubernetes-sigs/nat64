@@ -1,9 +1,12 @@
 # nat64
 
-NAT64 implementation for Kubernetes deployments (mainly)
+This repo contains a NAT64 implementation for Kubernetes deployments (mainly).
 
-Despite you can use [IPv6 only in Kubernetes since 2019](https://github.com/kubernetes/enhancements/pull/1139) the Internet is still far of having parity between both IPv4 and
-IPv6 worlds. DNS64 and NAT64 are commonly used to solve this problem and Kubernetes is not different, on the contrary, thanks to its "simple" network principlies this model is easy to implement.
+While you can use
+[IPv6-only in Kubernetes since 2019](https://github.com/kubernetes/enhancements/pull/1139),
+the Internet is still far from parity between IPv4 and IPv6 support. DNS64 and
+NAT64 are a common solution to this problem and Kubernetes is no different. To
+the contrary - thanks to its "simple" network principles, this model is easy to implement.
 
 
             +---------------------+         +---------------+
@@ -24,9 +27,9 @@ IPv6 worlds. DNS64 and NAT64 are commonly used to solve this problem and Kuberne
 ### DNS64
 
 The main problem with DNS64 in Kubernetes is that the DNS service use to be implemented as
-a Deployment, so the Pods only can communicate via IPv6 with the upstream DNS server. This is
-one of the main problems why we need this solution, to be able to get rid from this [hack we
-have to use in KIND](https://github.com/kubernetes-sigs/kind/blob/7c2f6c1dcd332c039ac3e7d3e3dc0dd1ec2e6a6d/hack/ci/e2e-k8s.sh#L213-L238) , since the Github runners are IPv4 only.
+a Deployment, so the Pods can only communicate via IPv6 with the upstream DNS server. This is
+one of the main problems why we need this solution, to be able to get rid of this [hack we
+have to use in KIND](https://github.com/kubernetes-sigs/kind/blob/7c2f6c1dcd332c039ac3e7d3e3dc0dd1ec2e6a6d/hack/ci/e2e-k8s.sh#L213-L238), since the Github runners are IPv4 only.
 
 We can just forward requests to [a public DNS64 server](https://developers.google.com/speed/public-dns/docs/dns64), also CoreDNS has a [DNS64 plugin](https://coredns.io/plugins/dns64/)
 
