@@ -6,3 +6,11 @@ networking:
 nodes:
 - role: control-plane
 - role: worker
+kubeadmConfigPatches:
+- |
+  kind: ClusterConfiguration
+  controllerManager:
+    extraArgs:
+      node-cidr-mask-size-ipv6: "120"
+  networking:
+    podSubnet: "fd00:10:244::/112"

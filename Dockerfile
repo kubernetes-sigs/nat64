@@ -21,7 +21,7 @@ COPY ./bpf ./bpf
 # TODO: make it so that we only build this in Makefile and just copy object files here
 RUN clang -target bpf -I ./bpf/include -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.o
 
-FROM golang:1.22 AS builder
+FROM golang:1.24 AS builder
 # golang envs
 ARG GOARCH="amd64"
 ARG GOOS=linux
