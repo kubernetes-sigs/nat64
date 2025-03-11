@@ -99,6 +99,14 @@ jobs:
         - role: control-plane
         - role: worker
         - role: worker
+        kubeadmConfigPatches:
+        - |
+          kind: ClusterConfiguration
+          controllerManager:
+            extraArgs:
+              node-cidr-mask-size-ipv6: "120"
+          networking:
+            podSubnet: "fd00:10:244::/112"
         EOF
         # dump the kubeconfig for later
         /usr/local/bin/kind get kubeconfig --name ${{ env.KIND_CLUSTER_NAME}} > _artifacts/kubeconfig.conf

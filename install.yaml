@@ -3,6 +3,15 @@ kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: nat64
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - "nodes"
+  verbs:
+  - "get"
+  - "watch"
+  - "list"
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -51,6 +60,14 @@ spec:
       containers:
       - name: nat64
         image: aojea/nat64:v0.1.0
+        args:
+        - "/nat64"
+        - "--hostname=$(NODE_NAME)"
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         volumeMounts:
         - name: xtables-lock
           mountPath: /run/xtables.lock
