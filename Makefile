@@ -38,3 +38,27 @@ clean:
 	-$(QUIET) for i in $(SUBDIRS); do $(MAKE) $(SUBMAKEOPTS) -C $$i clean; done
 
 force :;
+
+# get image name from directory we're building
+IMAGE_NAME=nat64
+# docker image registry, default to upstream
+REGISTRY?=gcr.io/k8s-staging-networking
+# tag based on date-sha
+TAG?=$(shell echo "$$(date +v%Y%m%d)-$$(git describe --always --dirty)")
+# the full image tag
+NAT64_IMAGE?=$(REGISTRY)/$(IMAGE_NAME):$(TAG)
+PLATFORMS?=linux/amd64,linux/arm64
+
+image-build:
+	docker buildx build . \
+		--tag="${NAT64_IMAGE}" \
+		--load
+
+image-push:
+	docker buildx build . \
+		--platform="${PLATFORMS}" \
+		--tag="${NAT64_IMAGE}" \
+		--push
+
+.PHONY: release # Build a multi-arch docker image
+release: build image-push
