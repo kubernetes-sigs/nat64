@@ -220,18 +220,17 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 	ip6.flow_lbl[2] = 0;
 
 	// RFC 8215: use well-known prefix 64:ff9b for IPv6 src addr.
-	ip6.saddr.in6_u.u6_addr32[0] = bpf_htonl(0x0064ff9b);
-	ip6.saddr.in6_u.u6_addr32[1] = 0;
-	ip6.saddr.in6_u.u6_addr32[2] = 0;
+	ip6.saddr.in6_u.u6_addr32[0] = bpf_htonl(IPV6_NAT_PREFIX_0 & IPV6_NAT_MASK_0);
+	ip6.saddr.in6_u.u6_addr32[1] = bpf_htonl(IPV6_NAT_PREFIX_1 & IPV6_NAT_MASK_1);
+	ip6.saddr.in6_u.u6_addr32[2] = bpf_htonl(IPV6_NAT_PREFIX_2 & IPV6_NAT_MASK_2);
 	ip6.saddr.in6_u.u6_addr32[3] = ip4.saddr;
 
 	// Use container subnet here for dst address. Pod prefix is used for the
 	// last byte.
-	// TODO: make this configurable how many bytes are actually used
 	dst_addr = (POD_PREFIX_3 & POD_MASK_3) | (bpf_ntohl(ip4.daddr) & (~POD_MASK_3));
-	ip6.daddr.in6_u.u6_addr32[0] = bpf_htonl(POD_PREFIX_0);
-	ip6.daddr.in6_u.u6_addr32[1] = bpf_htonl(POD_PREFIX_1);
-	ip6.daddr.in6_u.u6_addr32[2] = bpf_htonl(POD_PREFIX_2);
+	ip6.daddr.in6_u.u6_addr32[0] = bpf_htonl(POD_PREFIX_0 & POD_MASK_0);
+	ip6.daddr.in6_u.u6_addr32[1] = bpf_htonl(POD_PREFIX_1 & POD_MASK_1);
+	ip6.daddr.in6_u.u6_addr32[2] = bpf_htonl(POD_PREFIX_2 & POD_MASK_2);
 	ip6.daddr.in6_u.u6_addr32[3] = bpf_htonl(dst_addr);
 
 	// This also takes care of resizing socket buffer to handle different IP
@@ -307,9 +306,11 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 static __always_inline __u32 ip4_new_saddr(struct ipv6hdr *ip6) {
 	// Build source ip, save variable bytes of the ipv6 address plus the prefix.
 	// 198.18.xxx.xxx
-	__u32 mask = 0x0000FFFF & (~POD_MASK_3);
-	__u32 new_src = bpf_htonl(0xC6120000 + (bpf_ntohl(ip6->saddr.in6_u.u6_addr32[3]) & mask));
+	__u32 new_src = IPV4_NAT_PREFIX & IPV4_NAT_MASK;
+	__u32 mask = (~IPV4_NAT_MASK) & (~POD_MASK_3);
+	__u32 ip6_saved_bytes = bpf_ntohl(ip6->saddr.in6_u.u6_addr32[3]) & mask;
 
+	new_src = bpf_htonl(new_src | ip6_saved_bytes);
 	return new_src;
 }
 
