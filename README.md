@@ -96,18 +96,8 @@ Just do `kubectl apply -f https://raw.githubusercontent.com/aojea/nat64/main/ins
 
 Assuming you have checked out the repo and you are already in the repo folder
 
-1. Install kind cluster with IPv6 only
-
-```yaml
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-featureGates:
-networking:
-  ipFamily: ipv6
-nodes:
-- role: control-plane
-- role: worker
-```
+1. Install kind cluster with IPv6 only using `kind-ipv6.yaml` located in the
+   root directory of the repository
 
 ```sh
 kind create cluster --name ipv6 --config kind-ipv6.yaml
@@ -116,13 +106,15 @@ kind create cluster --name ipv6 --config kind-ipv6.yaml
 1. Build project (it already compiles the eBPF code too)
 
 ```sh
-docker build . -t aojea/nat64:v0.1.0
+make image-build
+# save image tag
+IMAGE_TAG=...
 ```
 
 1. Preload the image in the kind cluster we just created
 
 ```sh
-kind load docker-image aojea/nat64:v0.1.0 --name ipv6
+kind load docker-image ${IMAGE_TAG} --name ipv6
 ```
 
 1. Install the nat64 daemonset
@@ -156,7 +148,7 @@ This is far to be complete, features and suggestions are welcome:
 - [ ] metrics: number of NAT64 translations: connection, packets, protocol, ...
 - [ ] Right now the algorithm to map 6 to 4 is very simple, use the latest digit from the Pod IPv6 address, this limits us to 254 connection, is that enough?
 - [x] TCP and UDP checksum (fixed by @siwiutki)
-- [ ] ICMP
+- [x] ICMP
 - [ ] Testing, testing, ....
 
 ## Contributors

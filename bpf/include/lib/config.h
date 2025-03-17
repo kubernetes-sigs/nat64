@@ -17,10 +17,22 @@ limitations under the License.
 #pragma once
 
 // all constants here are overriden from user-space level
+volatile const uint32_t IPV4_NAT_PREFIX = 0;
+volatile const uint32_t IPV4_NAT_MASK = 0;
+
+volatile const uint32_t IPV6_NAT_PREFIX_0 = 0;
+volatile const uint32_t IPV6_NAT_PREFIX_1 = 0;
+volatile const uint32_t IPV6_NAT_PREFIX_2 = 0;
+
+volatile const uint32_t IPV6_NAT_MASK_0 = 0;
+volatile const uint32_t IPV6_NAT_MASK_1 = 0;
+volatile const uint32_t IPV6_NAT_MASK_2 = 0;
+
 volatile const uint32_t POD_PREFIX_0 = 0;
 volatile const uint32_t POD_PREFIX_1 = 0;
 volatile const uint32_t POD_PREFIX_2 = 0;
 volatile const uint32_t POD_PREFIX_3 = 0;
+
 volatile const uint32_t POD_MASK_0 = 0;
 volatile const uint32_t POD_MASK_1 = 0;
 volatile const uint32_t POD_MASK_2 = 0;

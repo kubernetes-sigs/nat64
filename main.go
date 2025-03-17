@@ -57,10 +57,9 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU               = 1500
-	bpfProgram                = "bpf/nat64.o"
-	reconcilePeriod           = 5 * time.Minute
-	widestPodCIDRRangeAllowed = 112
+	originalMTU     = 1500
+	bpfProgram      = "bpf/nat64.o"
+	reconcilePeriod = 5 * time.Minute
 )
 
 var (
@@ -76,7 +75,7 @@ var (
 
 func init() {
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0.0.0.0:8881", "The IP address and port for the metrics server to serve on, default 0.0.0.0:8881")
-	flag.StringVar(&natV4Range, "nat-v4-cidr", "198.18.0.0/16", "The IPv4 CIDR used to source NAT the NAT64 addresses")
+	flag.StringVar(&natV4Range, "nat-v4-cidr", "169.254.64.0/24", "The IPv4 CIDR used to source NAT the NAT64 addresses")
 	flag.StringVar(&natV6Range, "nat-v6-cidr", "64:ff9b::/96", "The IPv6 CIDR used for IPv4-Embedded IPv6 Address Prefix, default 64:ff9b::/96 (rfc6052)")
 	flag.StringVar(&nat64If, "iface", "nat64", "The name of the interfaces created in the system to implement NAT64")
 	flag.StringVar(&podCIDR, "source-cidr", "", "The subnet used to set the source range to NAT64, by default all traffic using the nat64 prefix is allowed")
@@ -101,6 +100,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Wrong nat-v4-cidr %s: %v", natV4Range, err)
 	}
+	v4netMaskSize, v4netSize := v4net.Mask.Size()
+	if v4netSize > 32 {
+		log.Fatalf("nat-v4-cidr is required to be IPv4 CIDR: %s", natV4Range)
+	}
 
 	routes, err := netlink.RouteGet(v4ip)
 	if err != nil {
@@ -114,6 +117,14 @@ func main() {
 	v6ip, v6net, err := net.ParseCIDR(natV6Range)
 	if err != nil {
 		log.Fatalf("Wrong nat-v6-cidr %s: %v", natV6Range, err)
+	}
+	if v6net.IP.To4() != nil {
+		log.Fatalf("nat-v6-cidr is required to be IPv6 CIDR: %s", natV6Range)
+	}
+
+	v6netMaskSize, _ := v6net.Mask.Size()
+	if v6netMaskSize > 96 {
+		log.Fatalf("nat-v6-cidr must be /96 or wider, need at least 4 variable bytes to embed IPv4 address")
 	}
 
 	routes, err = netlink.RouteGet(v6ip)
@@ -158,11 +169,18 @@ func main() {
 	if podIPNet.IP.To4() != nil {
 		log.Fatalf("podCIDR is required to be IPv6 CIDR: %s", podCIDR)
 	}
-	// TODO: it's fixed to /112 now because IPv4 range for source addresses for NAT is hardcoded
-	//       right now, this will be later changed to depend on the size of that range once it's configurable
-	maskSize, _ := podIPNet.Mask.Size()
-	if maskSize < widestPodCIDRRangeAllowed {
-		log.Fatalf("Mask for pod CIDR must be /120 or narrower to avoid source address collision for NAT64: %s", podCIDR)
+
+	podIPNetMaskSize, _ := podIPNet.Mask.Size()
+	// In stateless NAT algorithm, variable bits from pod CIDR are retained
+	// (for /120 pod CIDR, 1 byte is variable, for /112, 2 bytes, etc.).
+	// Those last bytes of IPv6 pod address are saved in IPv4 source address after IPv6 -> IPv4 NAT
+	// (for /120 pod CIDR, 198.18.0.0/16 IPv4 nat range and fd00:10:244:1::c5ff pod,
+	// bytes 0xc5 (197) and 0xff (255) will be saved, resulting in 198.18.197.255 source address).
+	// The wider IPv4 nat range is provided, the more pods we can handle without collissions, resulting
+	// in wider supported pod CIDR.
+	widestPodCIDRRangeAllowed := 128 - v4netMaskSize
+	if podIPNetMaskSize < widestPodCIDRRangeAllowed {
+		log.Fatalf("Mask for pod CIDR must be of size %d or narrower to avoid source address collision for NAT64: %s", widestPodCIDRRangeAllowed, podCIDR)
 	}
 
 	// Obtain the interface with the default route for IPv4 so we can masquerade the traffic
@@ -328,14 +346,29 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 	err = spec.RewriteConstants(map[string]interface{}{
 		//		"NAT64_PREFIX": uint32(transportProtocolNumber),
 		//		"NAT46_PREFIX": uint32(family),
+
+		"IPV4_NAT_PREFIX": binary.BigEndian.Uint32(v4net.IP),
+		"IPV4_NAT_MASK":   binary.BigEndian.Uint32(v4net.Mask),
+
+		// no need to hold IPV6_NAT_PREFIX_3 and IPV6_NAT_MASK_3
+		// last 4 bytes are reserved for embedding IPv4 address
+		"IPV6_NAT_PREFIX_0": binary.BigEndian.Uint32(v6net.IP[0:4]),
+		"IPV6_NAT_PREFIX_1": binary.BigEndian.Uint32(v6net.IP[4:8]),
+		"IPV6_NAT_PREFIX_2": binary.BigEndian.Uint32(v6net.IP[8:12]),
+
+		"IPV6_NAT_MASK_0": binary.BigEndian.Uint32(v6net.Mask[0:4]),
+		"IPV6_NAT_MASK_1": binary.BigEndian.Uint32(v6net.Mask[4:8]),
+		"IPV6_NAT_MASK_2": binary.BigEndian.Uint32(v6net.Mask[8:12]),
+
 		"POD_PREFIX_0": binary.BigEndian.Uint32(podIPNet.IP[0:4]),
 		"POD_PREFIX_1": binary.BigEndian.Uint32(podIPNet.IP[4:8]),
 		"POD_PREFIX_2": binary.BigEndian.Uint32(podIPNet.IP[8:12]),
 		"POD_PREFIX_3": binary.BigEndian.Uint32(podIPNet.IP[12:16]),
-		"POD_MASK_0":   binary.BigEndian.Uint32(podIPNet.Mask[0:4]),
-		"POD_MASK_1":   binary.BigEndian.Uint32(podIPNet.Mask[4:8]),
-		"POD_MASK_2":   binary.BigEndian.Uint32(podIPNet.Mask[8:12]),
-		"POD_MASK_3":   binary.BigEndian.Uint32(podIPNet.Mask[12:16]),
+
+		"POD_MASK_0": binary.BigEndian.Uint32(podIPNet.Mask[0:4]),
+		"POD_MASK_1": binary.BigEndian.Uint32(podIPNet.Mask[4:8]),
+		"POD_MASK_2": binary.BigEndian.Uint32(podIPNet.Mask[8:12]),
+		"POD_MASK_3": binary.BigEndian.Uint32(podIPNet.Mask[12:16]),
 	})
 	if err != nil {
 		return fmt.Errorf("Error rewriting eBPF program: %w", err)
