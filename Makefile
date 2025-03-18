@@ -61,4 +61,4 @@ image-push:
 		--push
 
 .PHONY: release # Build a multi-arch docker image
-release: build image-push
+release: image-push
