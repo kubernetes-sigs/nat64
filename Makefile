@@ -49,6 +49,10 @@ TAG?=$(shell echo "$$(date +v%Y%m%d)-$$(git describe --always --dirty)")
 NAT64_IMAGE?=$(REGISTRY)/$(IMAGE_NAME):$(TAG)
 PLATFORMS?=linux/amd64,linux/arm64
 
+.PHONY: ensure-buildx
+ensure-buildx:
+	./hack/init-buildx.sh
+
 image-build:
 	docker buildx build . \
 		--tag="${NAT64_IMAGE}" \
@@ -61,4 +65,4 @@ image-push:
 		--push
 
 .PHONY: release # Build a multi-arch docker image
-release: image-push
+release: ensure-buildx image-push
