@@ -61,7 +61,7 @@ import (
 const (
 	originalMTU     = 1500
 	bpfProgram      = "bpf/nat64.o"
-	reconcilePeriod = 5 * time.Minute
+	reconcilePeriod = 1 * time.Minute
 	tableName       = "kube-nat64"
 )
 
@@ -238,15 +238,15 @@ func main() {
 	// sync nftables rules
 	go func() {
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
 			klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
 			err = syncRules(v4net, gwIface)
 			if err != nil {
 				klog.Infof("error syncing nftables rules: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
 			}
 		}
 	}()
