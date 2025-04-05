@@ -617,7 +617,7 @@ func printVersion() {
 			vcsTime = f.Value
 		}
 	}
-	klog.Infof("dranet go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
+	klog.Infof("nat64 go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
 }
 
 func ifname(n string) []byte {
