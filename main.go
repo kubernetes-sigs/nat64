@@ -237,24 +237,20 @@ func main() {
 
 	// sync nftables rules
 	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
-		err = syncRules(v4net, gwIface)
-		if err != nil {
-			klog.Infof("error syncing nftables rules: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
+			err = syncRules(v4net, gwIface)
+			if err != nil {
+				klog.Infof("error syncing nftables rules: %v", err)
+			}
 		}
 	}()
 
-	klog.Infoln("NAT64 initialized")
 	defer func() {
 		// Clean up:
 		// - NAT64 interface
