@@ -32,7 +32,7 @@ COPY ./main.go ./go.mod ./go.sum ./
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /go/bin/nat64 .
 
-FROM registry.k8s.io/build-image/distroless-iptables:v0.5.1
+FROM gcr.io/distroless/static-debian12
 COPY --from=ebpf-builder --chown=root:root /go/src/app/bpf/nat64.o /bpf/nat64.o
 COPY --from=builder --chown=root:root /go/bin/nat64 /nat64
 CMD ["/nat64"]
