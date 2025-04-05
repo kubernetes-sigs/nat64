@@ -36,6 +36,7 @@ limitations under the License.
 #define TC_ACT_SHOT	2
 
 #define PACKET_HOST	0
+#define DEBUG 1 // Define DEBUG as 1 for debug mode, 0 for production
 
 /* Declare BPF maps */
 
@@ -55,17 +56,23 @@ int nat64(struct __sk_buff *skb) {
 	const int l3_offset = sizeof(struct ethhdr);
 	int ret = 0;
 
+	#ifdef DEBUG
 	bpf_printk("NAT64: starting...");
+	#endif
 
 	// Forward packet if we can't handle it.
 	if (!nat64_valid(skb)) {
+		#ifdef DEBUG
 		bpf_printk("NAT64 packet forwarded: not valid for nat64");
+		#endif
 		return TC_ACT_OK;
 	}
 
 	ret = bpf_skb_load_bytes(skb, 0, &eth, sizeof(struct ethhdr));
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("NAT64 packet dropped: bpf_skb_load_bytes failed for ethhdr");
+		#endif
 		return TC_ACT_SHOT;
 	}
 
@@ -76,13 +83,19 @@ int nat64(struct __sk_buff *skb) {
 	if (ret < 0) {
 		switch (ret) {
 		case IP_NAT_NOT_SUPPORTED:
+			#ifdef DEBUG
 			bpf_printk("NAT64 packet forwarded: protocol not supported");
+			#endif
 			return TC_ACT_OK;
 		case IP_NAT_ERROR:
+			#ifdef DEBUG
 			bpf_printk("NAT64 packet dropped: IP NAT returned error");
+			#endif
 			return TC_ACT_SHOT;
 		default:
+			#ifdef DEBUG
 			bpf_printk("NAT64 packet forwarded: IP NAT returned undefined error code, please file a bug report");
+			#endif
 			return TC_ACT_OK;
 		}
 	}
@@ -90,11 +103,14 @@ int nat64(struct __sk_buff *skb) {
 	// Copy over the ethernet header with updated ethertype.
 	ret = bpf_skb_store_bytes(skb, 0, &eth, sizeof(struct ethhdr), 0);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("NAT64 packet dropped: copy eth header");
+		#endif
 		return TC_ACT_SHOT;
 	}
-
+	#ifdef DEBUG
 	bpf_printk("NAT64 finished...");
+	#endif
 	return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
 }
 
@@ -108,17 +124,23 @@ int nat46(struct __sk_buff *skb) {
 	const int l3_offset = sizeof(struct ethhdr);
 	int ret = 0;
 
+	#ifdef DEBUG
 	bpf_printk("NAT46: starting...");
+	#endif
 
 	// Forward packet if we can't handle it.
 	if (!nat46_valid(skb)) {
+		#ifdef DEBUG
 		bpf_printk("NAT46 packet forwarded: not valid for nat46");
+		#endif
 		return TC_ACT_OK;
 	}
 
 	ret = bpf_skb_load_bytes(skb, 0, &eth, sizeof(struct ethhdr));
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("NAT46 packet dropped: bpf_skb_load_bytes failed for ethhdr");
+		#endif
 		return TC_ACT_SHOT;
 	}
 
@@ -129,13 +151,19 @@ int nat46(struct __sk_buff *skb) {
 	if (ret < 0) {
 		switch (ret) {
 		case IP_NAT_NOT_SUPPORTED:
+			#ifdef DEBUG
 			bpf_printk("NAT46 packet forwarded: protocol not supported");
+			#endif
 			return TC_ACT_OK;
 		case IP_NAT_ERROR:
+			#ifdef DEBUG
 			bpf_printk("NAT46 packet dropped: IP NAT returned error");
+			#endif
 			return TC_ACT_SHOT;
 		default:
+			#ifdef DEBUG
 			bpf_printk("NAT46 packet forwarded: IP NAT returned undefined error code, please file a bug report");
+			#endif
 			return TC_ACT_OK;
 		}
 	}
@@ -143,11 +171,15 @@ int nat46(struct __sk_buff *skb) {
 	// Copy over the ethernet header with updated ethertype.
 	ret = bpf_skb_store_bytes(skb, 0, &eth, sizeof(struct ethhdr), 0);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("NAT46 packet dropped: copy eth header");
+		#endif
 		return TC_ACT_SHOT;
 	}
 
+	#ifdef DEBUG
 	bpf_printk("NAT46 finished...");
+	#endif
 	return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
 }
 

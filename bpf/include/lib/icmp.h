@@ -49,7 +49,9 @@ static __always_inline int icmp6_to_icmp4(struct __sk_buff *skb, int icmp_offset
 
 	ret = bpf_skb_load_bytes(skb, icmp_offset, &icmp6, sizeof(struct icmp6hdr));
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP6->ICMP4: bpf_skb_load_bytes failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
@@ -130,13 +132,17 @@ static __always_inline int icmp6_to_icmp4(struct __sk_buff *skb, int icmp_offset
 
 	ret = bpf_skb_store_bytes(skb, icmp_offset, &icmp4, sizeof(struct icmphdr), 0);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP6->ICMP4: bpf_skb_store_bytes failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
 	ret = bpf_l4_csum_replace(skb, icmp_csum_offset, 0, icmp_csum_diff, BPF_F_PSEUDO_HDR);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP6->ICMP4: bpf_l4_csum_replace failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
@@ -160,7 +166,9 @@ static __always_inline int icmp4_to_icmp6(struct __sk_buff *skb, int icmp_offset
 
 	ret = bpf_skb_load_bytes(skb, icmp_offset, &icmp4, sizeof(struct icmphdr));
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP4->ICMP6: bpf_skb_load_bytes failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
@@ -245,13 +253,17 @@ static __always_inline int icmp4_to_icmp6(struct __sk_buff *skb, int icmp_offset
 
 	ret = bpf_skb_store_bytes(skb, icmp_offset, &icmp6, sizeof(struct icmp6hdr), 0);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP4->ICMP6: bpf_skb_store_bytes failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
 	ret = bpf_l4_csum_replace(skb, icmp6_csum_offset, 0, icmp6_csum_diff, BPF_F_PSEUDO_HDR);
 	if (ret < 0) {
+		#ifdef DEBUG
 		bpf_printk("ICMP4->ICMP6: bpf_l4_csum_replace failed with code: %d", ret);
+		#endif
 		return ICMP_NAT_ERROR;
 	}
 
