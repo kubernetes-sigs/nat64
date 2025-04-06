@@ -83,7 +83,7 @@ table inet kube-nat64 {
 	//  ip6tables -t nat -A POSTROUTING -o lo -j MASQUERADE
 
 	cmd := exec.Command("ip6tables", "-t", "nat", "-A", "POSTROUTING", "-o", "lo", "-j", "MASQUERADE")
-	out, err := cmd.CombinedOutput()
+	_, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("ip6tables error error = %v", err)
 	}
@@ -94,7 +94,7 @@ table inet kube-nat64 {
 	}
 
 	cmd = exec.Command("nft", "list", "ruleset")
-	out, err = cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("nft list table error = %v", err)
 	}
