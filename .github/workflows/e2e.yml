@@ -140,11 +140,19 @@ jobs:
         echo "${original_coredns}"
         # Patch it
         fixed_coredns=$( printf '%s' "${original_coredns}" | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
+
+        # Patch the CoreDNS config to add nat64 after errors
+        fixed_coredns=$(printf '%s' "${fixed_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/')
+
         echo "Patched CoreDNS config:"
         echo "${fixed_coredns}"
         printf '%s' "${fixed_coredns}" | kubectl apply -f -
         kubectl -n kube-system rollout restart deployment coredns
         /usr/local/bin/kubectl wait --timeout=1m --for=condition=ready pods --namespace=kube-system -l k8s-app=kube-dns
+
+    - name: Run smoke tests
+      run: |
+        kubectl run -i test-dns --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com"
 
     - name: Run tests
       run: |
