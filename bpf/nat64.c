@@ -85,25 +85,6 @@ static __always_inline __wsum csum_sub(__wsum csum, __wsum addend) {
 	return csum_add(csum, ~addend);
 }
 
-// TODO: this works only because of how k8s assigns IP to pods on nodes.
-//       This naive approach works with max limit of 256 pods deployed
-//       on the node. Future work would be to remove this limit by supporting
-//       stateful src IP assignment.
-static __always_inline __u32 ip4_new_saddr(struct ipv6hdr *ip6) {
-	// The upper bytes of the IPv4 NATed address
-	__u32 upper_addr = IPV4_SNAT_PREFIX & IPV4_SNAT_MASK;
-	// The lower bytes are the remaining ones masked
-	// with the original IPv6 address
-	__u32 lower_addr = (~IPV4_SNAT_MASK) & ip6->saddr.in6_u.u6_addr32[3];
-	__u32 new_src = bpf_htonl(upper_addr | lower_addr);
-
-	#ifdef DEBUG
-	bpf_printk("IP4 saddr: %pI4", new_src);
-	#endif
-	
-	return new_src;
-}
-
 static __always_inline __wsum ip6_pseudohdr_csum(struct ipv6hdr *ip6) {
 	__be32 payload_len = bpf_htonl((__u32)bpf_ntohs(ip6->payload_len));
 	__be32 nexthdr = bpf_htonl((__u32)ip6->nexthdr);
@@ -532,7 +513,16 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 	ip4.ttl = ip6.hop_limit;
 	ip4.protocol = (ip6.nexthdr == IPPROTO_ICMPV6) ? IPPROTO_ICMP : ip6.nexthdr;
 
-	ip4.saddr = ip4_new_saddr(&ip6);
+	// TODO: this works only because of how k8s assigns IP to pods on nodes.
+	//       This naive approach works with max limit of 256 pods deployed
+	//       on the node. Future work would be to remove this limit by supporting
+	//       stateful src IP assignment.
+	// The upper bytes of the IPv4 NATed address
+	__u32 upper_addr = IPV4_SNAT_PREFIX & IPV4_SNAT_MASK;
+	// The lower bytes are the remaining ones masked
+	// with the original IPv6 address
+	__u32 lower_addr = (~IPV4_SNAT_MASK) & bpf_ntohl(ip6.saddr.in6_u.u6_addr32[3]);
+	ip4.saddr = bpf_htonl(upper_addr | lower_addr);
 	// Extract IPv4 address from the last 4 bytes of IPv6 address.
 	ip4.daddr = ip6.daddr.in6_u.u6_addr32[3];
 
@@ -669,7 +659,6 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 	struct iphdr ip4 = {};
 	struct ipv6hdr ip6 = {};
 	int ret = 0;
-	__u16 *p = (void *)&ip6;
 	__wsum pseudohdr_csum = 0;
 	int l4_offset = 0;
 	__wsum l4_csum_diff = 0;
