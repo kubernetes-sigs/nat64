@@ -221,6 +221,7 @@ func main() {
 	}
 
 	// sync nat64
+	cleanup()
 	klog.Infof("create NAT64 interface %s with networks %s and %s", nat64If, v4net.String(), v6net.String())
 	err = sync(v4net, v6net, podIPNet)
 	if err != nil {
@@ -251,14 +252,6 @@ func main() {
 		}
 	}()
 
-	defer func() {
-		// Clean up:
-		// - NAT64 interface
-		// - nftables rules
-		klog.Infoln("NAT64 cleaning up")
-		cleanup()
-	}()
-
 	select {
 	case <-signalCh:
 		klog.Infof("Exiting: received signal")
@@ -266,6 +259,11 @@ func main() {
 	case <-ctx.Done():
 	}
 
+	// Clean up:
+	// - NAT64 interface
+	// - nftables rules
+	klog.Infoln("NAT64 cleaning up")
+	cleanup()
 }
 
 // sync creates the nat64 interface with the corresponding addresses
@@ -340,22 +338,24 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	err = spec.RewriteConstants(map[string]interface{}{
-		//		"NAT64_PREFIX": uint32(transportProtocolNumber),
-		//		"NAT46_PREFIX": uint32(family),
+		// This is the range that is used to replace the original
+		// IPv6 address, so it can be masquerade later with the
+		// external IPv4 address.
+		"IPV4_SNAT_PREFIX": binary.BigEndian.Uint32(v4net.IP),
+		"IPV4_SNAT_MASK":   binary.BigEndian.Uint32(v4net.Mask),
 
-		"IPV4_NAT_PREFIX": binary.BigEndian.Uint32(v4net.IP),
-		"IPV4_NAT_MASK":   binary.BigEndian.Uint32(v4net.Mask),
-
+		// NAT64 prefix, typically the well known prefix 64:ff9b::/96
 		// no need to hold IPV6_NAT_PREFIX_3 and IPV6_NAT_MASK_3
 		// last 4 bytes are reserved for embedding IPv4 address
-		"IPV6_NAT_PREFIX_0": binary.BigEndian.Uint32(v6net.IP[0:4]),
-		"IPV6_NAT_PREFIX_1": binary.BigEndian.Uint32(v6net.IP[4:8]),
-		"IPV6_NAT_PREFIX_2": binary.BigEndian.Uint32(v6net.IP[8:12]),
+		"IPV6_NAT64_PREFIX_0": binary.BigEndian.Uint32(v6net.IP[0:4]),
+		"IPV6_NAT64_PREFIX_1": binary.BigEndian.Uint32(v6net.IP[4:8]),
+		"IPV6_NAT64_PREFIX_2": binary.BigEndian.Uint32(v6net.IP[8:12]),
 
-		"IPV6_NAT_MASK_0": binary.BigEndian.Uint32(v6net.Mask[0:4]),
-		"IPV6_NAT_MASK_1": binary.BigEndian.Uint32(v6net.Mask[4:8]),
-		"IPV6_NAT_MASK_2": binary.BigEndian.Uint32(v6net.Mask[8:12]),
+		"IPV6_NAT64_MASK_0": binary.BigEndian.Uint32(v6net.Mask[0:4]),
+		"IPV6_NAT64_MASK_1": binary.BigEndian.Uint32(v6net.Mask[4:8]),
+		"IPV6_NAT64_MASK_2": binary.BigEndian.Uint32(v6net.Mask[8:12]),
 
+		// IPv6 prefix used by Pods
 		"POD_PREFIX_0": binary.BigEndian.Uint32(podIPNet.IP[0:4]),
 		"POD_PREFIX_1": binary.BigEndian.Uint32(podIPNet.IP[4:8]),
 		"POD_PREFIX_2": binary.BigEndian.Uint32(podIPNet.IP[8:12]),
@@ -508,7 +508,7 @@ func cleanup() {
 
 	nft, err := nftables.New()
 	if err != nil {
-		klog.Infof("ipmasq cleanup failure, can not start nftables:%v", err)
+		klog.Infof("nat64 cleanup failure, can not start nftables:%v", err)
 		return
 	}
 	table := &nftables.Table{
