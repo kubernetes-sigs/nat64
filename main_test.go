@@ -39,14 +39,26 @@ func Test_syncRules(t *testing.T) {
 		t.Fatalf("unexpected error %v", err)
 	}
 
+	_, v6net, err := net.ParseCIDR("64:ff9b::/96")
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+
 	gwIf := "eth0"
 
-	expectedNftables := `
+	expectedNftables := `# Warning: table ip6 nat is managed by iptables-nft, do not touch!
+table ip6 nat {
+       chain POSTROUTING {
+               type nat hook postrouting priority srcnat; policy accept;
+               ip6 daddr 64:ff9b::/96 counter packets 0 bytes 0 return comment "kube-nat64-rule"
+               oifname "lo" counter packets 0 bytes 0 masquerade
+       }
+}
 table inet kube-nat64 {
-				chain postrouting {
-								type nat hook postrouting priority srcnat - 10; policy accept;
-  							ip saddr 192.168.0.0/18 oifname "eth0" masquerade counter packets 0 bytes 0
-				}
+       chain postrouting {
+               type nat hook postrouting priority srcnat - 10; policy accept;
+               ip saddr 192.168.0.0/18 oifname "eth0" masquerade counter packets 0 bytes 0
+       }
 }
 `
 
@@ -67,13 +79,22 @@ table inet kube-nat64 {
 	}
 	defer newns.Close() // nolint:errcheck
 
-	err = syncRules(v4net, gwIf)
+	// add a fake rule to masquerade all the traffic
+	//  ip6tables -t nat -A POSTROUTING -o lo -j MASQUERADE
+
+	cmd := exec.Command("ip6tables", "-t", "nat", "-A", "POSTROUTING", "-o", "lo", "-j", "MASQUERADE")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ip6tables error error = %v", err)
+	}
+
+	err = syncRules(v4net, v6net, gwIf)
 	if err != nil {
 		t.Fatalf("error syncing nftables rules: %v", err)
 	}
 
-	cmd := exec.Command("nft", "list", "table", "inet", tableName)
-	out, err := cmd.CombinedOutput()
+	cmd = exec.Command("nft", "list", "ruleset")
+	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("nft list table error = %v", err)
 	}
@@ -89,6 +110,14 @@ table inet kube-nat64 {
 	}
 	if !strings.Contains(string(out), "No such file or directory") {
 		t.Errorf("unexpected error %v %s", err, string(out))
+	}
+	cmd = exec.Command("nft", "list", "table", "ip6", "nat")
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("nft list ruleset unexpected eror")
+	}
+	if strings.Contains(string(out), v6net.String()) {
+		t.Errorf("unexpected rule on default table %s %s", v6net.String(), string(out))
 	}
 	// Switch back to the original namespace
 	_ = netns.Set(origns)

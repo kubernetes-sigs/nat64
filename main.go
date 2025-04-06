@@ -34,6 +34,7 @@ import (
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -63,6 +64,7 @@ const (
 	bpfProgram      = "bpf/nat64.o"
 	reconcilePeriod = 1 * time.Minute
 	tableName       = "kube-nat64"
+	commentRule     = "kube-nat64-rule"
 )
 
 var (
@@ -240,7 +242,7 @@ func main() {
 	go func() {
 		for {
 			klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
-			err = syncRules(v4net, gwIface)
+			err = syncRules(v4net, v6net, gwIface)
 			if err != nil {
 				klog.Infof("error syncing nftables rules: %v", err)
 			}
@@ -281,14 +283,6 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 			},
 		}
 		if err := netlink.LinkAdd(link); err != nil {
-			return err
-		}
-	}
-
-	// set the interface up if necessary
-	if link.Attrs().Flags&net.FlagUp == 0 {
-		klog.Infof("NAT64 interface with name %s down, setting it up", nat64If)
-		if err := netlink.LinkSetUp(link); err != nil {
 			return err
 		}
 	}
@@ -429,10 +423,17 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		}
 	}
 
+	// set the interface up if necessary
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		klog.Infof("NAT64 interface with name %s down, setting it up", nat64If)
+		if err := netlink.LinkSetUp(link); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func syncRules(natV4Range *net.IPNet, gwIface string) error {
+func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 	klog.V(2).Info("Syncing nat64 nftables rules")
 	nft, err := nftables.New()
 	if err != nil {
@@ -484,10 +485,50 @@ func syncRules(natV4Range *net.IPNet, gwIface string) error {
 			&expr.Counter{},
 		},
 	})
-
 	err = nft.Flush()
 	if err != nil {
-		return fmt.Errorf("error deleting nftables rules %v", err)
+		return fmt.Errorf("error adding nftables rule for NAT64 masquerade %v", err)
+	}
+
+	// avoid any existing masquerading rules to masquerade the NAT64 traffic
+	// This is required to deal with some existing components like ip-masq-agent
+	/*
+		nft --debug=netlink insert rule ip6 nat POSTROUTING ip6 daddr 64:ff9b::/90 counter return
+		ip6 nat POSTROUTING
+			[ payload load 16b @ network header + 24 => reg 1 ]
+			[ bitwise reg 1 = ( reg 1 & 0xffffffff 0xffffffff 0xc0ffffff 0x00000000 ) ^ 0x00000000 0x00000000 0x00000000 0x00000000 ]
+			[ cmp eq reg 1 0x9bff6400 0x00000000 0x00000000 0x00000000 ]
+			[ counter pkts 0 bytes 0 ]
+			[ immediate reg 0 return ]
+	*/
+
+	// well known table and chain
+	nftNatTable := &nftables.Table{
+		Name:   "nat",
+		Family: nftables.TableFamilyIPv6,
+	}
+	nftPostroutingChain := &nftables.Chain{
+		Table:    nftNatTable,
+		Name:     "POSTROUTING",
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+	nft.InsertRule(&nftables.Rule{
+		Table:    nftNatTable,
+		Chain:    nftPostroutingChain,
+		UserData: userdata.AppendString(nil, userdata.TypeComment, commentRule),
+		Exprs: []expr.Any{
+			&expr.Payload{DestRegister: 0x1, Base: expr.PayloadBaseNetworkHeader, Offset: 24, Len: 16},
+			&expr.Bitwise{SourceRegister: 0x1, DestRegister: 0x1, Len: 16, Mask: natV6Range.Mask, Xor: make([]byte, 16)},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: natV6Range.IP.To16()},
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictKind(unix.NFT_RETURN)},
+		},
+	})
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
 	}
 	return nil
 }
@@ -520,6 +561,42 @@ func cleanup() {
 	if err != nil {
 		klog.Infof("error deleting nftables rules %v", err)
 	}
+
+	nftNatTable := &nftables.Table{
+		Name:   "nat",
+		Family: nftables.TableFamilyIPv6,
+	}
+	nftPostroutingChain := &nftables.Chain{
+		Table:    nftNatTable,
+		Name:     "POSTROUTING",
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+
+	rules, err := nft.GetRules(nftNatTable, nftPostroutingChain)
+	if err != nil {
+		klog.Infof("error getting nftables rules on default table %v", err)
+		return
+	}
+	for _, rule := range rules {
+		if comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment); ok && comment == commentRule {
+			err = nft.DelRule(&nftables.Rule{
+				Table:  nftNatTable,
+				Chain:  nftPostroutingChain,
+				Handle: rule.Handle,
+			})
+			if err != nil {
+				klog.Infof("error deleting nftables rules on default table %v", err)
+			}
+			err = nft.Flush()
+			if err != nil {
+				klog.Infof("error deleting nftables rules on default table %v", err)
+			}
+			break
+		}
+	}
+
 }
 
 func getDefaultGwIf() (string, error) {
