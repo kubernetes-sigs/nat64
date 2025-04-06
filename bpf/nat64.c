@@ -849,13 +849,6 @@ int nat64(struct __sk_buff *skb) {
 	bpf_printk("NAT64 finished...");
 	#endif
 
-	struct bpf_fib_lookup fib_params = {};
-	int lookup_flags = 0;
-
-	ret = bpf_fib_lookup(skb, &fib_params, sizeof(fib_params), lookup_flags);
-	if (ret < 0) {
-		return TC_ACT_SHOT;
-	}
 	return bpf_redirect(skb->ifindex, BPF_F_INGRESS);
 }
 
