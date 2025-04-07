@@ -11,6 +11,6 @@ kubeadmConfigPatches:
   kind: ClusterConfiguration
   controllerManager:
     extraArgs:
-      node-cidr-mask-size-ipv6: "120"
+      node-cidr-mask-size-ipv6: "124" # default v4 nat64 range is 169.254.64.0/24
   networking:
     podSubnet: "fd00:10:244::/112"

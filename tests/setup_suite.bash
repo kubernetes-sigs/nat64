@@ -27,7 +27,7 @@ function setup_suite {
   echo "Original CoreDNS config:"
   echo "${original_coredns}"
   # Patch it
-  fixed_coredns=$(printf '%s' "${original_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/' | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
+  fixed_coredns=$(printf '%s' "${original_coredns}" | awk '{ print } /errors/ && !inserted { print "        dns64 {\n          translate_all\n        }"; inserted = 1 }' | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
   echo "Patched CoreDNS config with dns64:"
   echo "${fixed_coredns}"
   printf '%s' "${fixed_coredns}" | kubectl apply -f -
