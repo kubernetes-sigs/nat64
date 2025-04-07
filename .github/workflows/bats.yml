@@ -33,4 +33,12 @@ jobs:
         env:
          BATS_LIB_PATH: ${{ steps.setup-bats.outputs.lib-path }}
          TERM: xterm
-        run: bats tests/
+        run: mkdir -p _artifacts && bats -o _artifacts tests/
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
+          path: ./_artifacts
+ 
