@@ -60,11 +60,10 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU     = 1500
-	bpfProgram      = "bpf/nat64.o"
-	reconcilePeriod = 1 * time.Minute
-	tableName       = "kube-nat64"
-	commentRule     = "kube-nat64-rule"
+	originalMTU = 1500
+	bpfProgram  = "bpf/nat64.o"
+	tableName   = "kube-nat64"
+	commentRule = "kube-nat64-rule"
 )
 
 var (
