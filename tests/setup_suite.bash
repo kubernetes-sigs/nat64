@@ -15,16 +15,7 @@ function setup_suite {
     return
   fi
 
-  cat <<EOF | kind create cluster -v7 --wait 1m --retain --name "$CLUSTER_NAME" --config=-
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-networking:
-  ipFamily: ipv6
-nodes:
-- role: control-plane
-- role: worker
-EOF
-
+  kind create cluster --wait 1m --retain --name "$CLUSTER_NAME" --config="$BATS_TEST_DIRNAME"/../kind-ipv6.yaml
   # Install nat64
   kind load docker-image registry.k8s.io/networking/nat64:test --name "$CLUSTER_NAME"
   nat64_install=$(sed 's#registry.k8s.io/networking/nat64.*#registry.k8s.io/networking/nat64:test#' < "$BATS_TEST_DIRNAME"/../install.yaml)
@@ -37,7 +28,7 @@ EOF
   echo "${original_coredns}"
   # Patch it
   fixed_coredns=$(printf '%s' "${original_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/' | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
-  echo "Patched CoreDNS config:"
+  echo "Patched CoreDNS config with dns64:"
   echo "${fixed_coredns}"
   printf '%s' "${fixed_coredns}" | kubectl apply -f -
   kubectl -n kube-system rollout restart deployment coredns
