@@ -31,8 +31,7 @@ function setup_suite {
   echo "${fixed_coredns}"
   printf '%s' "${fixed_coredns}" | kubectl apply -f -
   kubectl -n kube-system rollout restart deployment coredns
-
-  kubectl wait --for=condition=ready pods --namespace=kube-system -l k8s-app=kube-dns
+  kubectl -n kube-system rollout status deployment coredns
 }
 
 function teardown_suite {

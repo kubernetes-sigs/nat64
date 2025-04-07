@@ -3,14 +3,13 @@
 @test "test curl works from Pods" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    run kubectl \
+    output=$(kubectl \
       run -i test-dns$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
-    [ "$status" -eq 0 ]
-    [ "$output" = "ok" ]
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail")
+    test "$output" = "ok"
   done
 }
 
@@ -21,15 +20,14 @@
   # In this scenario, host network Pods run in the host namespace, so they already
   # have IPv4 access
   for i in $(seq 1 5) ; do
-      echo "Test Pod $i"
-      run kubectl \
-      run -i test-hostnet-dns$i \
+    echo "Test Pod $i"
+    output=$(kubectl \
+      run -i test-dns$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --overrides='{"spec": {"hostNetwork": true}}' \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
-    [ "$status" -eq 0 ]
-    [ "$output" = "ok" ]
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail")
+    test "$output" = "ok"
   done
 }
