@@ -8,7 +8,7 @@
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent www.github.com && echo ok || echo fail"
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
     [ "$status" -eq 0 ]
     [ "$output" = "ok" ]
   done
@@ -28,7 +28,7 @@
       --overrides='{"spec": {"hostNetwork": true}}' \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent www.github.com && echo ok || echo fail"
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
     [ "$status" -eq 0 ]
     [ "$output" = "ok" ]
   done

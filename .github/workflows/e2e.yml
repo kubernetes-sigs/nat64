@@ -151,7 +151,7 @@ jobs:
       run: |
         for i in $(seq 1 5) ; do
           echo "Test Pod $i"
-          output=$(kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --restart=Never --command -- sh -c "curl -6 --silent www.github.com && echo ok || echo fail") 
+          output=$(kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --restart=Never --command -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail") 
           if [ "$output" == "ok" ]; then
             echo "Test passed: Output is 'ok'"
           else
