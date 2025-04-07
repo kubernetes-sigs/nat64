@@ -2,6 +2,7 @@
 
 @test "test curl works from Pods" {
   for i in $(seq 1 5) ; do
+    echo "Test Pod $i"
     run kubectl \
       run -i test-dns$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
@@ -20,6 +21,7 @@
   # In this scenario, host network Pods run in the host namespace, so they already
   # have IPv4 access
   for i in $(seq 1 5) ; do
+      echo "Test Pod $i"
       run kubectl \
       run -i test-hostnet-dns$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
