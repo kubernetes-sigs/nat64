@@ -156,7 +156,11 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Cannot fetch cluster config: %v", err)
 	}
+
 	k8sClient, err := clientset.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Cannot create kubernetes client: %v", err)
+	}
 
 	if len(podCIDR) == 0 {
 		klog.Infof("Watching for node, awaiting podCIDR allocation")
@@ -235,24 +239,12 @@ func main() {
 		}
 	}
 
-	ticker := time.NewTicker(reconcilePeriod)
-	defer ticker.Stop()
-
 	// sync nftables rules
-	go func() {
-		for {
-			klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
-			err = syncRules(v4net, v6net, gwIface)
-			if err != nil {
-				klog.Infof("error syncing nftables rules: %v", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
+	klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
+	err = syncRules(v4net, v6net, gwIface)
+	if err != nil {
+		klog.Fatalf("error syncing nftables rules: %v", err)
+	}
 
 	select {
 	case <-signalCh:
