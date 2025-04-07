@@ -581,14 +581,12 @@ func cleanup() {
 			if err != nil {
 				klog.Infof("error deleting nftables rules on default table %v", err)
 			}
-			err = nft.Flush()
-			if err != nil {
-				klog.Infof("error deleting nftables rules on default table %v", err)
-			}
-			break
 		}
 	}
-
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error deleting nftables rules on default table %v", err)
+	}
 }
 
 func getDefaultGwIf() (string, error) {
