@@ -3,7 +3,6 @@
 set -eu
 
 function setup_suite {
-
   # Build the nat64 project
   docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/.. --load
 
@@ -37,6 +36,6 @@ function setup_suite {
 }
 
 function teardown_suite {
-    kind export logs  --name "$CLUSTER_NAME"
+    kind export logs "$BATS_TEST_DIRNAME"/../_artifacts --name "$CLUSTER_NAME"
     kind delete cluster --name "$CLUSTER_NAME"
 }
