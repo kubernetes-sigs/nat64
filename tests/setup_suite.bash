@@ -32,6 +32,8 @@ function setup_suite {
   printf '%s' "${fixed_coredns}" | kubectl apply -f -
   kubectl -n kube-system rollout restart deployment coredns
   kubectl -n kube-system rollout status deployment coredns
+  # test depend on external connectivity that can be very flaky
+  sleep 5
 }
 
 function teardown_suite {
