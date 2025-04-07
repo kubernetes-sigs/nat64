@@ -1,0 +1,51 @@
+#!/bin/bash
+
+set -eu
+
+function setup_suite {
+
+  # Build the nat64 project
+  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/.. --load
+
+  # Define the name of the kind cluster
+  export CLUSTER_NAME="nat64-test-cluster"
+
+  # Check if the kind cluster exists
+  if kind get clusters | grep -q "$CLUSTER_NAME"; then
+    return
+  fi
+
+  cat <<EOF | kind create cluster -v7 --wait 1m --retain --name "$CLUSTER_NAME" --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+nodes:
+- role: control-plane
+- role: worker
+EOF
+
+  # Install nat64
+  kind load docker-image registry.k8s.io/networking/nat64:test --name "$CLUSTER_NAME"
+  nat64_install=$(sed 's#registry.k8s.io/networking/nat64.*#registry.k8s.io/networking/nat64:test#' < "$BATS_TEST_DIRNAME"/../install.yaml)
+  printf '%s' "${nat64_install}" | kubectl apply -f -
+  kubectl wait --for=condition=ready pods --namespace=kube-system -l k8s-app=nat64
+
+  # Use Google Public DNS64 https://developers.google.com/speed/public-dns/docs/dns64 
+  original_coredns=$(kubectl get -oyaml -n=kube-system configmap/coredns)
+  echo "Original CoreDNS config:"
+  echo "${original_coredns}"
+  # Patch it
+  fixed_coredns=$(printf '%s' "${original_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/' | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
+  echo "Patched CoreDNS config:"
+  echo "${fixed_coredns}"
+  printf '%s' "${fixed_coredns}" | kubectl apply -f -
+  kubectl -n kube-system rollout restart deployment coredns
+
+  kubectl wait --for=condition=ready pods --namespace=kube-system -l k8s-app=kube-dns
+}
+
+function teardown_suite {
+    kind export logs  --name "$CLUSTER_NAME"
+    # kind delete cluster --name "$CLUSTER_NAME"
+}
