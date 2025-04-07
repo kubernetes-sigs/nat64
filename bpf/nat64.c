@@ -489,7 +489,6 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 	struct ipv6hdr ip6 = {};
 	struct iphdr ip4 = {};
 	int ret = 0;
-	__u16 *p = (void *)&ip4;
 	__be16 tot_len = 0;
 	int l4_offset = 0;
 	__wsum pseudohdr_csum = 0;

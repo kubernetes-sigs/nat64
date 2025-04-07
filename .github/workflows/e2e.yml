@@ -138,21 +138,14 @@ jobs:
         original_coredns=$(kubectl get -oyaml -n=kube-system configmap/coredns)
         echo "Original CoreDNS config:"
         echo "${original_coredns}"
-        # Patch it
-        fixed_coredns=$( printf '%s' "${original_coredns}" | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
-
-        # Patch the CoreDNS config to add nat64 after errors
-        fixed_coredns=$(printf '%s' "${fixed_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/')
+        # Patch the CoreDNS config to resolve upstream
+        fixed_coredns=$(printf '%s' "${original_coredns}" | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
 
         echo "Patched CoreDNS config:"
         echo "${fixed_coredns}"
         printf '%s' "${fixed_coredns}" | kubectl apply -f -
         kubectl -n kube-system rollout restart deployment coredns
-        /usr/local/bin/kubectl wait --timeout=1m --for=condition=ready pods --namespace=kube-system -l k8s-app=kube-dns
-
-    - name: Run smoke tests
-      run: |
-        for i in $(seq 1 5) ; do kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com" ; done
+        kubectl -n kube-system rollout status deployment coredns
 
     - name: Run tests
       run: |
@@ -161,7 +154,7 @@ jobs:
 
         # Run tests
         /usr/local/bin/ginkgo --nodes=25                \
-          --focus="DNS"     \
+          --focus="\[Conformance\]"     \
           --skip="Feature|Federation|machinery|PerformanceDNS|DualStack|Disruptive|Serial|Slow|KubeProxy|LoadBalancer|GCE|Netpol|NetworkPolicy|NodeConformance"   \
           /usr/local/bin/e2e.test                       \
           --                                            \

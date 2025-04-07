@@ -89,6 +89,39 @@ func init() {
 	}
 }
 
+func validateNetworks(v4nat64, v6nat64, podRange *net.IPNet) error {
+	errorsList := []error{}
+	// this will give us the number of Pods that can be snated 2^(32-masksize)
+	v4netMaskSize, v4netSize := v4nat64.Mask.Size()
+	if v4netSize > 32 {
+		errorsList = append(errorsList, fmt.Errorf("nat-v4-cidr is required to be IPv4 CIDR: %s", v4nat64.String()))
+	}
+
+	// this embeds the IPv4 on the last 4 bytes, so it has to be at least 96
+	v6netMaskSize, _ := v6nat64.Mask.Size()
+	if v6netMaskSize > 96 {
+		errorsList = append(errorsList, fmt.Errorf("nat-v6-cidr must be /96 or wider, need at least 4 variable bytes to embed IPv4 address: %s", v6nat64.String()))
+	}
+
+	// This is an IPv6 only cluster so Pods can only get IPv6 addresses
+	if podRange.IP.To4() != nil {
+		errorsList = append(errorsList, fmt.Errorf("podCIDR is required to be IPv6 CIDR: %s", podRange.String()))
+	}
+
+	podIPNetMaskSize, _ := podRange.Mask.Size()
+	// In stateless NAT algorithm, variable bits from pod CIDR are retained
+	// (for /120 pod CIDR, 1 byte is variable, for /112, 2 bytes, etc.).
+	// Those last bytes of IPv6 pod address are saved in IPv4 source address after IPv6 -> IPv4 NAT
+	// (for /120 pod CIDR, 198.18.0.0/16 IPv4 nat range and fd00:10:244:1::c5ff pod,
+	// bytes 0xc5 (197) and 0xff (255) will be saved, resulting in 198.18.197.255 source address).
+	// The wider IPv4 nat range is provided, the more pods we can handle without collissions, resulting
+	// in wider supported pod CIDR.
+	if (32 - v4netMaskSize) < (128 - podIPNetMaskSize) {
+		errorsList = append(errorsList, fmt.Errorf("mask for pod CIDR %s must be of size %d or narrower to fit into the NAT64 defined range: %s", podRange.String(), 128-(32-v4netMaskSize), v4nat64.String()))
+	}
+	return errors.Join(errorsList...)
+}
+
 func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -107,10 +140,6 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Wrong nat-v4-cidr %s: %v", natV4Range, err)
 	}
-	v4netMaskSize, v4netSize := v4net.Mask.Size()
-	if v4netSize > 32 {
-		klog.Fatalf("nat-v4-cidr is required to be IPv4 CIDR: %s", natV4Range)
-	}
 
 	routes, err := netlink.RouteGet(v4ip)
 	if err != nil {
@@ -127,11 +156,6 @@ func main() {
 	}
 	if v6net.IP.To4() != nil {
 		klog.Fatalf("nat-v6-cidr is required to be IPv6 CIDR: %s", natV6Range)
-	}
-
-	v6netMaskSize, _ := v6net.Mask.Size()
-	if v6netMaskSize > 96 {
-		klog.Fatalf("nat-v6-cidr must be /96 or wider, need at least 4 variable bytes to embed IPv4 address")
 	}
 
 	routes, err = netlink.RouteGet(v6ip)
@@ -177,21 +201,9 @@ func main() {
 	if err != nil {
 		klog.Fatalf("net.ParseCIDR: %v", err)
 	}
-	if podIPNet.IP.To4() != nil {
-		klog.Fatalf("podCIDR is required to be IPv6 CIDR: %s", podCIDR)
-	}
 
-	podIPNetMaskSize, _ := podIPNet.Mask.Size()
-	// In stateless NAT algorithm, variable bits from pod CIDR are retained
-	// (for /120 pod CIDR, 1 byte is variable, for /112, 2 bytes, etc.).
-	// Those last bytes of IPv6 pod address are saved in IPv4 source address after IPv6 -> IPv4 NAT
-	// (for /120 pod CIDR, 198.18.0.0/16 IPv4 nat range and fd00:10:244:1::c5ff pod,
-	// bytes 0xc5 (197) and 0xff (255) will be saved, resulting in 198.18.197.255 source address).
-	// The wider IPv4 nat range is provided, the more pods we can handle without collissions, resulting
-	// in wider supported pod CIDR.
-	widestPodCIDRRangeAllowed := 128 - v4netMaskSize
-	if podIPNetMaskSize < widestPodCIDRRangeAllowed {
-		klog.Fatalf("Mask for pod CIDR must be of size %d or narrower to avoid source address collision for NAT64: %s", widestPodCIDRRangeAllowed, podCIDR)
+	if err := validateNetworks(v4net, v6net, podIPNet); err != nil {
+		klog.Fatalf("current network parameters are not valid: %v", err)
 	}
 
 	// Obtain the interface with the default route for IPv4 so we can masquerade the traffic
