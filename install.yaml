@@ -59,7 +59,7 @@ spec:
       serviceAccountName: nat64
       containers:
       - name: nat64
-        image: aojea/nat64:v0.1.0
+        image: registry.k8s.io/networking/nat64:v0.2.0
         args:
         - "/nat64"
         - "--hostname=$(NODE_NAME)"
@@ -68,13 +68,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        volumeMounts:
-        - name: xtables-lock
-          mountPath: /run/xtables.lock
-          readOnly: false
-        - name: lib-modules
-          mountPath: /lib/modules
-          readOnly: true
         resources:
           requests:
             cpu: "100m"
@@ -86,12 +79,4 @@ spec:
           privileged: true
           capabilities:
             add: ["NET_ADMIN"]
-      volumes:
-      - name: xtables-lock
-        hostPath:
-          path: /run/xtables.lock
-          type: FileOrCreate
-      - name: lib-modules
-        hostPath:
-          path: /lib/modules
 ---

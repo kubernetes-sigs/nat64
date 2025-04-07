@@ -39,6 +39,12 @@ clean:
 
 force :;
 
+test:
+	go test -v -count 1 -race ./...
+
+lint:
+	hack/lint.sh
+
 # get image name from directory we're building
 IMAGE_NAME=nat64
 # docker image registry, default to upstream

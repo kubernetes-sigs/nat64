@@ -22,16 +22,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/coreos/go-iptables/iptables"
+	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
+	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -41,11 +44,11 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	toolswatch "k8s.io/client-go/tools/watch"
+	"k8s.io/klog/v2"
 )
 
 // Stateful implementation of NAT64 based in two stages using a dummy interface.
@@ -57,9 +60,10 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU     = 1500
-	bpfProgram      = "bpf/nat64.o"
-	reconcilePeriod = 5 * time.Minute
+	originalMTU = 1500
+	bpfProgram  = "bpf/nat64.o"
+	tableName   = "kube-nat64"
+	commentRule = "kube-nat64-rule"
 )
 
 var (
@@ -69,8 +73,6 @@ var (
 	nat64If            string
 	podCIDR            string
 	hostname           string
-
-	gwIface string
 )
 
 func init() {
@@ -88,86 +90,95 @@ func init() {
 }
 
 func main() {
-	// validation
+	klog.InitFlags(nil)
 	flag.Parse()
+
+	printVersion()
+	flag.VisitAll(func(f *flag.Flag) {
+		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
+	})
 
 	_, _, err := net.SplitHostPort(metricsBindAddress)
 	if err != nil {
-		log.Fatalf("Wrong metrics-bind-address %s: %v", metricsBindAddress, err)
+		klog.Fatalf("Wrong metrics-bind-address %s : %v", metricsBindAddress, err)
 	}
 
 	v4ip, v4net, err := net.ParseCIDR(natV4Range)
 	if err != nil {
-		log.Fatalf("Wrong nat-v4-cidr %s: %v", natV4Range, err)
+		klog.Fatalf("Wrong nat-v4-cidr %s: %v", natV4Range, err)
 	}
 	v4netMaskSize, v4netSize := v4net.Mask.Size()
 	if v4netSize > 32 {
-		log.Fatalf("nat-v4-cidr is required to be IPv4 CIDR: %s", natV4Range)
+		klog.Fatalf("nat-v4-cidr is required to be IPv4 CIDR: %s", natV4Range)
 	}
 
 	routes, err := netlink.RouteGet(v4ip)
 	if err != nil {
-		log.Fatalf("Can not get route to %s: %v", v4ip.String(), err)
+		klog.Fatalf("Can not get route to %s: %v", v4ip.String(), err)
 	}
 	// TODO: do not consider the default route
 	if len(routes) > 1 {
-		log.Printf("Overalapping routes %v with the range %s", routes, natV4Range)
+		klog.Infof("Overalapping routes %v with the range %s", routes, natV4Range)
 	}
 
 	v6ip, v6net, err := net.ParseCIDR(natV6Range)
 	if err != nil {
-		log.Fatalf("Wrong nat-v6-cidr %s: %v", natV6Range, err)
+		klog.Fatalf("Wrong nat-v6-cidr %s: %v", natV6Range, err)
 	}
 	if v6net.IP.To4() != nil {
-		log.Fatalf("nat-v6-cidr is required to be IPv6 CIDR: %s", natV6Range)
+		klog.Fatalf("nat-v6-cidr is required to be IPv6 CIDR: %s", natV6Range)
 	}
 
 	v6netMaskSize, _ := v6net.Mask.Size()
 	if v6netMaskSize > 96 {
-		log.Fatalf("nat-v6-cidr must be /96 or wider, need at least 4 variable bytes to embed IPv4 address")
+		klog.Fatalf("nat-v6-cidr must be /96 or wider, need at least 4 variable bytes to embed IPv4 address")
 	}
 
 	routes, err = netlink.RouteGet(v6ip)
 	if err != nil {
-		log.Fatalf("Can not get route to %s: %v", v6ip.String(), err)
+		klog.Fatalf("Can not get route to %s: %v", v6ip.String(), err)
 	}
 	// TODO: do not consider the default route
 	if len(routes) > 1 {
-		log.Printf("Overlapping routes %v with the range %s", routes, natV4Range)
+		klog.Infof("Overlapping routes %v with the range %s", routes, natV4Range)
 	}
 
 	if hostname == "" {
 		hostname, err = os.Hostname()
 		if err != nil {
-			log.Fatalf("Cannot fetch os.Hostname: %v", err)
+			klog.Fatalf("Cannot fetch os.Hostname: %v", err)
 		}
-		log.Printf("No hostname specified, using os.Hostname: %s", hostname)
+		klog.Infof("No hostname specified, using os.Hostname: %s", hostname)
 	}
 
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		log.Fatalf("Cannot fetch cluster config: %v", err)
+		klog.Fatalf("Cannot fetch cluster config: %v", err)
 	}
-	k8sClient, err := kubernetes.NewForConfig(config)
+
+	k8sClient, err := clientset.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Cannot create kubernetes client: %v", err)
+	}
 
 	if len(podCIDR) == 0 {
-		log.Printf("Watching for node, awaiting podCIDR allocation")
+		klog.Infof("Watching for node, awaiting podCIDR allocation")
 		ctx := context.Background()
 		node, err := waitForPodCIDR(ctx, k8sClient, hostname)
 		if err != nil {
-			log.Fatalf("waitForPodCIDR: %v", err)
+			klog.Fatalf("waitForPodCIDR: %v", err)
 		}
 		// take podCIDR from primary IP family configured for the cluster
 		podCIDR = node.Spec.PodCIDRs[0]
-		log.Printf("podCIDR: %s", podCIDR)
+		klog.Infof("podCIDR: %s", podCIDR)
 	}
 
 	_, podIPNet, err := net.ParseCIDR(podCIDR)
 	if err != nil {
-		log.Fatalf("net.ParseCIDR: %v", err)
+		klog.Fatalf("net.ParseCIDR: %v", err)
 	}
 	if podIPNet.IP.To4() != nil {
-		log.Fatalf("podCIDR is required to be IPv6 CIDR: %s", podCIDR)
+		klog.Fatalf("podCIDR is required to be IPv6 CIDR: %s", podCIDR)
 	}
 
 	podIPNetMaskSize, _ := podIPNet.Mask.Size()
@@ -180,15 +191,15 @@ func main() {
 	// in wider supported pod CIDR.
 	widestPodCIDRRangeAllowed := 128 - v4netMaskSize
 	if podIPNetMaskSize < widestPodCIDRRangeAllowed {
-		log.Fatalf("Mask for pod CIDR must be of size %d or narrower to avoid source address collision for NAT64: %s", widestPodCIDRRangeAllowed, podCIDR)
+		klog.Fatalf("Mask for pod CIDR must be of size %d or narrower to avoid source address collision for NAT64: %s", widestPodCIDRRangeAllowed, podCIDR)
 	}
 
 	// Obtain the interface with the default route for IPv4 so we can masquerade the traffic
-	gwIface, err = getDefaultGwIf()
+	gwIface, err := getDefaultGwIf()
 	if err != nil {
-		log.Fatalf("can not obtain default IPv4 gateway interface: %v", err)
+		klog.Fatalf("can not obtain default IPv4 gateway interface: %v", err)
 	}
-	log.Printf("detected %s as default gateway interface", gwIface)
+	klog.Infof("detected %s as default gateway interface", gwIface)
 
 	// trap Ctrl+C and call cancel on the context
 	ctx := context.Background()
@@ -205,81 +216,57 @@ func main() {
 	// run metrics server
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
-		log.Printf("starting metrics server listening in %s", metricsBindAddress)
-		http.ListenAndServe(metricsBindAddress, nil)
+		klog.Infof("starting metrics server listening in %s", metricsBindAddress)
+		http.ListenAndServe(metricsBindAddress, nil) // nolint:errcheck
 	}()
 
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Fatal("Removing memlock:", err)
+		klog.Fatal("Removing memlock:", err)
 	}
 
 	// sync nat64
-	log.Printf("create NAT64 interface %s with networks %s and %s", nat64If, v4net.String(), v6net.String())
+	cleanup()
+	klog.Infof("create NAT64 interface %s with networks %s and %s", nat64If, v4net.String(), v6net.String())
 	err = sync(v4net, v6net, podIPNet)
 	if err != nil {
 		var verr *ebpf.VerifierError
 		if errors.As(err, &verr) {
-			log.Fatalf("BPF verifier error: %+v\n", verr)
+			klog.Fatalf("BPF verifier error: %+v\n", verr)
 		} else {
-			log.Fatalf("Could not sync nat64: %v", err)
+			klog.Fatalf("Could not sync nat64: %v", err)
 		}
 	}
 
-	// Install iptables rule to masquerade IPv4 NAT64 traffic
-	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	// sync nftables rules
+	klog.Infoln("syncing nftables rules to masquerade v4 traffic...")
+	err = syncRules(v4net, v6net, gwIface)
 	if err != nil {
-		log.Fatalf("Could not use iptables IPv4: %v", err)
+		klog.Fatalf("error syncing nftables rules: %v", err)
 	}
-
-	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
-	if err != nil {
-		log.Fatalf("Could not use iptables IPv6: %v", err)
-	}
-
-	ticker := time.NewTicker(reconcilePeriod)
-	defer ticker.Stop()
-
-	// sync iptables rules
-	go func() {
-		log.Println("syncing iptables rules ...")
-		err = syncIptablesRules(ipt4, ipt6)
-		if err != nil {
-			log.Printf("error syncing iptables rules: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}()
-
-	log.Println("NAT64 initialized")
-	defer func() {
-		// Clean up:
-		// - NAT64 interface
-		// - iptables rules
-		log.Println("NAT64 cleaning up")
-		cleanup(v4net, v6net)
-	}()
 
 	select {
 	case <-signalCh:
-		log.Printf("Exiting: received signal")
+		klog.Infof("Exiting: received signal")
 		cancel()
 	case <-ctx.Done():
 	}
 
+	// Clean up:
+	// - NAT64 interface
+	// - nftables rules
+	klog.Infoln("NAT64 cleaning up")
+	cleanup()
 }
 
 // sync creates the nat64 interface with the corresponding addresses
 // installs the ebpf program on the interface
-// installes corresponding iptables rules
+// installes corresponding nftables rules
 func sync(v4net, v6net, podIPNet *net.IPNet) error {
 	// Create the NAT64 interface if it does not exist
 	link, err := netlink.LinkByName(nat64If)
 	if link == nil || err != nil {
-		log.Printf("NAT64 interface with name %s not found, creating it", nat64If)
+		klog.Infof("NAT64 interface with name %s not found, creating it", nat64If)
 		link = &netlink.Dummy{
 			LinkAttrs: netlink.LinkAttrs{
 				Name: nat64If,
@@ -291,21 +278,13 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		}
 	}
 
-	// set the interface up if necessary
-	if link.Attrs().Flags&net.FlagUp == 0 {
-		log.Printf("NAT64 interface with name %s down, setting it up", nat64If)
-		if err := netlink.LinkSetUp(link); err != nil {
-			return err
-		}
-	}
-
 	// Configure IP addresses on the NAT64 interface if necessary
 	addresses, err := netlink.AddrList(link, netlink.FAMILY_V4)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("replacing addresses %v on interface %s with %s", addresses, nat64If, v4net.String())
+	klog.Infof("replacing addresses %v on interface %s with %s", addresses, nat64If, v4net.String())
 	if err := netlink.AddrReplace(link, &netlink.Addr{IPNet: v4net}); err != nil {
 		return err
 	}
@@ -315,7 +294,7 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		return err
 	}
 
-	log.Printf("replacing addresses %v on interface %s with %s", addresses, nat64If, v6net.String())
+	klog.Infof("replacing addresses %v on interface %s with %s", addresses, nat64If, v6net.String())
 	if err := netlink.AddrReplace(link, &netlink.Addr{IPNet: v6net}); err != nil {
 		return err
 	}
@@ -340,26 +319,28 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	for _, prog := range spec.Programs {
-		log.Printf("eBPF program spec section %s name %s", prog.SectionName, prog.Name)
+		klog.Infof("eBPF program spec section %s name %s", prog.SectionName, prog.Name)
 	}
 
 	err = spec.RewriteConstants(map[string]interface{}{
-		//		"NAT64_PREFIX": uint32(transportProtocolNumber),
-		//		"NAT46_PREFIX": uint32(family),
+		// This is the range that is used to replace the original
+		// IPv6 address, so it can be masquerade later with the
+		// external IPv4 address.
+		"IPV4_SNAT_PREFIX": binary.BigEndian.Uint32(v4net.IP),
+		"IPV4_SNAT_MASK":   binary.BigEndian.Uint32(v4net.Mask),
 
-		"IPV4_NAT_PREFIX": binary.BigEndian.Uint32(v4net.IP),
-		"IPV4_NAT_MASK":   binary.BigEndian.Uint32(v4net.Mask),
-
+		// NAT64 prefix, typically the well known prefix 64:ff9b::/96
 		// no need to hold IPV6_NAT_PREFIX_3 and IPV6_NAT_MASK_3
 		// last 4 bytes are reserved for embedding IPv4 address
-		"IPV6_NAT_PREFIX_0": binary.BigEndian.Uint32(v6net.IP[0:4]),
-		"IPV6_NAT_PREFIX_1": binary.BigEndian.Uint32(v6net.IP[4:8]),
-		"IPV6_NAT_PREFIX_2": binary.BigEndian.Uint32(v6net.IP[8:12]),
+		"IPV6_NAT64_PREFIX_0": binary.BigEndian.Uint32(v6net.IP[0:4]),
+		"IPV6_NAT64_PREFIX_1": binary.BigEndian.Uint32(v6net.IP[4:8]),
+		"IPV6_NAT64_PREFIX_2": binary.BigEndian.Uint32(v6net.IP[8:12]),
 
-		"IPV6_NAT_MASK_0": binary.BigEndian.Uint32(v6net.Mask[0:4]),
-		"IPV6_NAT_MASK_1": binary.BigEndian.Uint32(v6net.Mask[4:8]),
-		"IPV6_NAT_MASK_2": binary.BigEndian.Uint32(v6net.Mask[8:12]),
+		"IPV6_NAT64_MASK_0": binary.BigEndian.Uint32(v6net.Mask[0:4]),
+		"IPV6_NAT64_MASK_1": binary.BigEndian.Uint32(v6net.Mask[4:8]),
+		"IPV6_NAT64_MASK_2": binary.BigEndian.Uint32(v6net.Mask[8:12]),
 
+		// IPv6 prefix used by Pods
 		"POD_PREFIX_0": binary.BigEndian.Uint32(podIPNet.IP[0:4]),
 		"POD_PREFIX_1": binary.BigEndian.Uint32(podIPNet.IP[4:8]),
 		"POD_PREFIX_2": binary.BigEndian.Uint32(podIPNet.IP[8:12]),
@@ -371,7 +352,7 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		"POD_MASK_3": binary.BigEndian.Uint32(podIPNet.Mask[12:16]),
 	})
 	if err != nil {
-		return fmt.Errorf("Error rewriting eBPF program: %w", err)
+		return fmt.Errorf("unexpected error rewriting eBPF program: %w", err)
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
@@ -398,9 +379,9 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		DirectAction: true,
 	}
 
-	log.Printf("adding eBPF nat64 prog to the interface %s", nat64If)
+	klog.Infof("adding eBPF nat64 prog to the interface %s", nat64If)
 	if err := netlink.FilterAdd(filter); err != nil {
-		log.Printf("filter %s already exist on interface %s, replacing it ...", filter.Name, nat64If)
+		klog.Infof("filter %s already exist on interface %s, replacing it ...", filter.Name, nat64If)
 		// it may already exist, try to replace it
 		if err := netlink.FilterReplace(filter); err != nil {
 			return fmt.Errorf("replacing tc filter for interface %s: %w", link.Attrs().Name, err)
@@ -425,60 +406,186 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 		DirectAction: true,
 	}
 
-	log.Printf("adding eBPF nat46 prog to the interface %s", nat64If)
+	klog.Infof("adding eBPF nat46 prog to the interface %s", nat64If)
 	if err := netlink.FilterAdd(filter); err != nil {
-		log.Printf("filter %s already exist on interface %s, replacing it ...", filter.Name, nat64If)
+		klog.Infof("filter %s already exist on interface %s, replacing it ...", filter.Name, nat64If)
 		if err := netlink.FilterReplace(filter); err != nil {
 			return fmt.Errorf("replacing tc filter for interface %s: %w", link.Attrs().Name, err)
 		}
 	}
 
+	// set the interface up if necessary
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		klog.Infof("NAT64 interface with name %s down, setting it up", nat64If)
+		if err := netlink.LinkSetUp(link); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func syncIptablesRules(ipt4, ipt6 *iptables.IPTables) error {
-	// Install iptables rule to not masquerade IPv6 NAT64 traffic
-	if err := ipt6.InsertUnique("nat", "POSTROUTING", 1, "-d", natV6Range, "-j", "RETURN"); err != nil {
-		return err
+func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
+	klog.V(2).Info("Syncing nat64 nftables rules")
+	nft, err := nftables.New()
+	if err != nil {
+		return fmt.Errorf("nat64 failure, can not start nftables: %v", err)
+	}
+	// add + delete + add for flushing all the table
+	table := &nftables.Table{
+		Name:   tableName,
+		Family: nftables.TableFamilyINet,
+	}
+	nft.AddTable(table)
+	nft.DelTable(table)
+	nft.AddTable(table)
+
+	chain := nft.AddChain(&nftables.Chain{
+		Name:     "postrouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityRef(*nftables.ChainPriorityNATSource - 10),
+	})
+
+	/*
+			nft --debug=netlink add rule inet kindnet-ipmasq postrouting ip saddr 10.0.0.0/18 meta oifname eth0 masquerade
+		inet kindnet-ipmasq postrouting
+		[ meta load nfproto => reg 1 ]
+		[ cmp eq reg 1 0x00000002 ]
+		[ payload load 4b @ network header + 12 => reg 1 ]
+		[ bitwise reg 1 = ( reg 1 & 0x00c0ffff ) ^ 0x00000000 ]
+		[ cmp eq reg 1 0x0000000a ]
+		[ meta load oifname => reg 1 ]
+		[ cmp eq reg 1 0x30687465 0x00000000 0x00000000 0x00000000 ]
+		[ masq ]
+	*/
+
+	// masquerade IPv4 traffic that was NAT64 "masquerade traffic"
+	nft.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyNFPROTO, SourceRegister: false, Register: 0x1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{unix.NFPROTO_IPV4}},
+			&expr.Payload{DestRegister: 0x1, Base: expr.PayloadBaseNetworkHeader, Offset: 12, Len: 4},
+			&expr.Bitwise{SourceRegister: 0x1, DestRegister: 0x1, Len: 4, Mask: natV4Range.Mask, Xor: binaryutil.NativeEndian.PutUint32(0)},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: natV4Range.IP.To4()},
+			&expr.Meta{Key: expr.MetaKeyOIFNAME, SourceRegister: false, Register: 0x1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: ifname(gwIface)},
+			&expr.Masq{Random: false, FullyRandom: false, Persistent: false, ToPorts: false, RegProtoMin: 0x0, RegProtoMax: 0x0},
+			&expr.Counter{},
+		},
+	})
+	err = nft.Flush()
+	if err != nil {
+		return fmt.Errorf("error adding nftables rule for NAT64 masquerade %v", err)
 	}
 
-	if err := ipt4.InsertUnique("nat", "POSTROUTING", 1, "-s", natV4Range, "-o", gwIface, "-j", "MASQUERADE"); err != nil {
-		return err
-	}
+	// avoid any existing masquerading rules to masquerade the NAT64 traffic
+	// This is required to deal with some existing components like ip-masq-agent
+	/*
+		nft --debug=netlink insert rule ip6 nat POSTROUTING ip6 daddr 64:ff9b::/90 counter return
+		ip6 nat POSTROUTING
+			[ payload load 16b @ network header + 24 => reg 1 ]
+			[ bitwise reg 1 = ( reg 1 & 0xffffffff 0xffffffff 0xc0ffffff 0x00000000 ) ^ 0x00000000 0x00000000 0x00000000 0x00000000 ]
+			[ cmp eq reg 1 0x9bff6400 0x00000000 0x00000000 0x00000000 ]
+			[ counter pkts 0 bytes 0 ]
+			[ immediate reg 0 return ]
+	*/
 
+	// well known table and chain
+	nftNatTable := &nftables.Table{
+		Name:   "nat",
+		Family: nftables.TableFamilyIPv6,
+	}
+	nftPostroutingChain := &nftables.Chain{
+		Table:    nftNatTable,
+		Name:     "POSTROUTING",
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+	nft.InsertRule(&nftables.Rule{
+		Table:    nftNatTable,
+		Chain:    nftPostroutingChain,
+		UserData: userdata.AppendString(nil, userdata.TypeComment, commentRule),
+		Exprs: []expr.Any{
+			&expr.Payload{DestRegister: 0x1, Base: expr.PayloadBaseNetworkHeader, Offset: 24, Len: 16},
+			&expr.Bitwise{SourceRegister: 0x1, DestRegister: 0x1, Len: 16, Mask: natV6Range.Mask, Xor: make([]byte, 16)},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: natV6Range.IP.To16()},
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictKind(unix.NFT_RETURN)},
+		},
+	})
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
+	}
 	return nil
 }
 
-// cleanup is best effort and deletes the NAT64 interface and the corresponding iiptables rules
-func cleanup(v4net, v6net *net.IPNet) {
+// cleanup is best effort and deletes the NAT64 interface and the corresponding inftables rules
+func cleanup() {
 	// Create the NAT64 interface if it does not exist
 	link, err := netlink.LinkByName(nat64If)
 	if err != nil {
-		log.Printf("could not find nat64 interface %s: %v", nat64If, err)
+		klog.Infof("could not find nat64 interface %s: %v", nat64If, err)
 	}
 
 	if link != nil {
 		if err := netlink.LinkDel(link); err != nil {
-			log.Printf("could not delete nat64 interface %s: %v", nat64If, err)
+			klog.Infof("could not delete nat64 interface %s: %v", nat64If, err)
 		}
 	}
 
-	// Install iptables rule to not masquerade IPv6 NAT64 traffic
-	ipt6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
-	if err == nil {
-		if err := ipt6.DeleteIfExists("nat", "POSTROUTING", "-d", natV6Range, "-j", "RETURN"); err != nil {
-			log.Printf("could not delete nat64 ipv6 rule for %s: %v", natV6Range, err)
-		}
-	}
-
-	// Install iptables rule to masquerade IPv4 NAT64 traffic
-	ipt4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	nft, err := nftables.New()
 	if err != nil {
-		if err := ipt4.DeleteIfExists("nat", "POSTROUTING", "-s", natV4Range, "-o", gwIface, "-j", "MASQUERADE"); err != nil {
-			log.Printf("could not delete nat64 ipv4 rule for %s: %v", natV4Range, err)
-		}
+		klog.Infof("nat64 cleanup failure, can not start nftables:%v", err)
+		return
+	}
+	table := &nftables.Table{
+		Name:   tableName,
+		Family: nftables.TableFamilyINet,
+	}
+	nft.DelTable(table)
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error deleting nftables rules %v", err)
 	}
 
+	nftNatTable := &nftables.Table{
+		Name:   "nat",
+		Family: nftables.TableFamilyIPv6,
+	}
+	nftPostroutingChain := &nftables.Chain{
+		Table:    nftNatTable,
+		Name:     "POSTROUTING",
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+
+	rules, err := nft.GetRules(nftNatTable, nftPostroutingChain)
+	if err != nil {
+		klog.Infof("error getting nftables rules on default table %v", err)
+		return
+	}
+	for _, rule := range rules {
+		if comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment); ok && comment == commentRule {
+			err = nft.DelRule(&nftables.Rule{
+				Table:  nftNatTable,
+				Chain:  nftPostroutingChain,
+				Handle: rule.Handle,
+			})
+			if err != nil {
+				klog.Infof("error deleting nftables rules on default table %v", err)
+			}
+		}
+	}
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error deleting nftables rules on default table %v", err)
+	}
 }
 
 func getDefaultGwIf() (string, error) {
@@ -495,7 +602,7 @@ func getDefaultGwIf() (string, error) {
 			}
 			intfLink, err := netlink.LinkByIndex(r.LinkIndex)
 			if err != nil {
-				log.Printf("Failed to get interface link for route %v : %v", r, err)
+				klog.Infof("Failed to get interface link for route %v : %v", r, err)
 				continue
 			}
 			return intfLink.Attrs().Name, nil
@@ -509,7 +616,7 @@ func getDefaultGwIf() (string, error) {
 			}
 			intfLink, err := netlink.LinkByIndex(r.LinkIndex)
 			if err != nil {
-				log.Printf("Failed to get interface link for route %v : %v", r, err)
+				klog.Infof("Failed to get interface link for route %v : %v", r, err)
 				continue
 			}
 			return intfLink.Attrs().Name, nil
@@ -560,4 +667,27 @@ func waitForPodCIDR(ctx context.Context, client clientset.Interface, nodeName st
 		return n, nil
 	}
 	return nil, fmt.Errorf("event object not of type node")
+}
+
+func printVersion() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	var vcsRevision, vcsTime string
+	for _, f := range info.Settings {
+		switch f.Key {
+		case "vcs.revision":
+			vcsRevision = f.Value
+		case "vcs.time":
+			vcsTime = f.Value
+		}
+	}
+	klog.Infof("nat64 go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
+}
+
+func ifname(n string) []byte {
+	b := make([]byte, 16)
+	copy(b, []byte(n+"\x00"))
+	return b
 }

@@ -14,8 +14,8 @@ env:
   GO_VERSION: "1.23"
   K8S_VERSION: "v1.32.0"
   KIND_VERSION: "v0.26.0"
-  REGISTRY: ghcr.io
-  IMAGE_NAME: aojea/nat64
+  REGISTRY: registry.k8s.io
+  IMAGE_NAME: networking/nat64
   KIND_CLUSTER_NAME: kind
 
 jobs:
@@ -34,9 +34,9 @@ jobs:
 
     - name: Build
       run: |
-        docker build -t aojea/nat64:test -f Dockerfile .
+        docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile .
         mkdir _output
-        docker save aojea/nat64:test  > _output/nat64-image.tar
+        docker save registry.k8s.io/networking/nat64:test  > _output/nat64-image.tar
 
     - uses: actions/upload-artifact@v4
       with:
@@ -119,8 +119,8 @@ jobs:
       run: |
         # preload nat64 image
         docker load --input nat64-image.tar
-        /usr/local/bin/kind load docker-image aojea/nat64:test --name ${{ env.KIND_CLUSTER_NAME}}
-        sed -i s#aojea/nat64.*#aojea/nat64:test# install.yaml
+        /usr/local/bin/kind load docker-image registry.k8s.io/networking/nat64:test --name ${{ env.KIND_CLUSTER_NAME}}
+        sed -i s#registry.k8s.io/networking/nat64.*#registry.k8s.io/networking/nat64:test# install.yaml
         /usr/local/bin/kubectl apply -f ./install.yaml
 
     - name: Get Cluster status
@@ -140,11 +140,19 @@ jobs:
         echo "${original_coredns}"
         # Patch it
         fixed_coredns=$( printf '%s' "${original_coredns}" | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
+
+        # Patch the CoreDNS config to add nat64 after errors
+        fixed_coredns=$(printf '%s' "${fixed_coredns}" | sed 's/errors\n/errors\n    dns64 {\n        translate_all\n    }\n/')
+
         echo "Patched CoreDNS config:"
         echo "${fixed_coredns}"
         printf '%s' "${fixed_coredns}" | kubectl apply -f -
         kubectl -n kube-system rollout restart deployment coredns
         /usr/local/bin/kubectl wait --timeout=1m --for=condition=ready pods --namespace=kube-system -l k8s-app=kube-dns
+
+    - name: Run smoke tests
+      run: |
+        for i in $(seq 1 5) ; do kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com" ; done
 
     - name: Run tests
       run: |
