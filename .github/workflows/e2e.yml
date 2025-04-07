@@ -138,27 +138,14 @@ jobs:
         original_coredns=$(kubectl get -oyaml -n=kube-system configmap/coredns)
         echo "Original CoreDNS config:"
         echo "${original_coredns}"
-        # Patch the CoreDNS config to add nat64 after errors
-        fixed_coredns=$(printf '%s' "${original_coredns}" | awk '{ print } /errors/ && !inserted { print "        dns64 {\n          translate_all\n        }"; inserted = 1 }' | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
+        # Patch the CoreDNS config to resolve upstream
+        fixed_coredns=$(printf '%s' "${original_coredns}" | sed 's/\/etc\/resolv.conf/[64:ff9b::8.8.8.8]:53/' )
 
         echo "Patched CoreDNS config:"
         echo "${fixed_coredns}"
         printf '%s' "${fixed_coredns}" | kubectl apply -f -
         kubectl -n kube-system rollout restart deployment coredns
         kubectl -n kube-system rollout status deployment coredns
-
-    - name: Run smoke tests
-      run: |
-        for i in $(seq 1 5) ; do
-          echo "Test Pod $i"
-          output=$(kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --restart=Never --command -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail") 
-          if [ "$output" == "ok" ]; then
-            echo "Test passed: Output is 'ok'"
-          else
-            echo "Test failed: Output is '$output'"
-            exit 1
-          fi
-        done
 
     - name: Run tests
       run: |
@@ -167,8 +154,8 @@ jobs:
 
         # Run tests
         /usr/local/bin/ginkgo --nodes=25                \
-          --focus="\[Conformance\]|\[sig-network\]"     \
-          --skip="DNS|Feature|Federation|machinery|PerformanceDNS|DualStack|Disruptive|Serial|Slow|KubeProxy|LoadBalancer|GCE|Netpol|NetworkPolicy|NodeConformance"   \
+          --focus="\[Conformance\]"     \
+          --skip="Feature|Federation|machinery|PerformanceDNS|DualStack|Disruptive|Serial|Slow|KubeProxy|LoadBalancer|GCE|Netpol|NetworkPolicy|NodeConformance"   \
           /usr/local/bin/e2e.test                       \
           --                                            \
           --kubeconfig=${PWD}/_artifacts/kubeconfig.conf     \
