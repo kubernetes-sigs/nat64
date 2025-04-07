@@ -152,7 +152,9 @@ jobs:
 
     - name: Run smoke tests
       run: |
-        for i in $(seq 1 5) ; do kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com" ; done
+        for i in $(seq 1 5) ; do
+          kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com" || exit 1
+        done
 
     - name: Run tests
       run: |
