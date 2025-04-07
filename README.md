@@ -24,6 +24,13 @@ the contrary - thanks to its "simple" network principles, this model is easy to 
 
               [rfc6146](https://datatracker.ietf.org/doc/html/rfc6146)
 
+## Prerequisites
+
+* This solution is intended for IPv6-only clusters that need IPv4 connectivity
+* Nodes need to have operating IPv4 network interface
+* NAT64 agent does NAT only for IPs coming from the Pod assigned range, that includes all Pods with `hostNetwork: false`, pods with
+  `hostNetwork: true` can use node network interface directly
+
 ### DNS64
 
 The main problem with DNS64 in Kubernetes is that the DNS service use to be implemented as
