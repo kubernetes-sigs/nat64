@@ -131,3 +131,96 @@ func compareMultilineStringsIgnoreIndentation(str1, str2 string) bool {
 
 	return str1 == str2
 }
+
+func Test_validateNetworks(t *testing.T) {
+	tests := []struct {
+		name     string
+		v4nat64  string
+		v6nat64  string
+		podRange string
+		wantErr  bool
+	}{
+		{
+			name:     "valid networks",
+			v4nat64:  "192.168.0.0/24",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/120",
+			wantErr:  false,
+		},
+		{
+			name:     "valid networks 2",
+			v4nat64:  "192.168.0.0/18",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/120",
+			wantErr:  false,
+		},
+		{
+			name:     "valid networks 3",
+			v4nat64:  "192.168.0.0/18",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/124",
+			wantErr:  false,
+		},
+		{
+			name:     "invalid pod CIDR",
+			v4nat64:  "192.168.0.0/18",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "192.168.0.0/18",
+			wantErr:  true,
+		},
+		{
+			name:     "invalid v6 CIDR",
+			v4nat64:  "192.168.0.0/18",
+			v6nat64:  "64:ff9b::/120",
+			podRange: "fd00:10:244::/112",
+			wantErr:  true,
+		},
+		{
+			name:     "invalid pod CIDR mask",
+			v4nat64:  "192.168.0.0/24",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/112",
+			wantErr:  true,
+		},
+		{
+			name:     "invalid pod CIDR mask 2",
+			v4nat64:  "192.168.0.0/28",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/120",
+			wantErr:  true,
+		},
+		{
+			name:     "valid pod CIDR mask 3",
+			v4nat64:  "192.168.0.0/8",
+			v6nat64:  "64:ff9b::/96",
+			podRange: "fd00:10:244::/104",
+			wantErr:  false,
+		},
+		{
+			name:     "invalid v6 CIDR mask",
+			v4nat64:  "192.168.0.0/18",
+			v6nat64:  "64:ff9b::/104",
+			podRange: "fd00:10:244::/112",
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, v4net, err := net.ParseCIDR(tt.v4nat64)
+			if err != nil {
+				t.Fatalf("unexpected error parsing v4net %s: %v", tt.v4nat64, err)
+			}
+			_, v6net, err := net.ParseCIDR(tt.v6nat64)
+			if err != nil {
+				t.Fatalf("unexpected error parsing v6net %s: %v", tt.v6nat64, err)
+			}
+			_, podNet, err := net.ParseCIDR(tt.podRange)
+			if err != nil {
+				t.Fatalf("unexpected error parsing podNet %s: %v", tt.podRange, err)
+			}
+			if err := validateNetworks(v4net, v6net, podNet); (err != nil) != tt.wantErr {
+				t.Errorf("validateNetworks() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
