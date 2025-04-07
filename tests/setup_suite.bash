@@ -38,5 +38,5 @@ function setup_suite {
 
 function teardown_suite {
     kind export logs  --name "$CLUSTER_NAME"
-    # kind delete cluster --name "$CLUSTER_NAME"
+    kind delete cluster --name "$CLUSTER_NAME"
 }
