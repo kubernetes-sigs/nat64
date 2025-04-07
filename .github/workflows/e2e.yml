@@ -153,7 +153,13 @@ jobs:
     - name: Run smoke tests
       run: |
         for i in $(seq 1 5) ; do
-          kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 www.github.com" || exit 1
+          output=$(kubectl run -i test-dns$i --image registry.k8s.io/e2e-test-images/agnhost:2.39 --command -- sh -c "curl -6 --silent www.github.com && echo ok || echo fail") 
+          if [ "$output" == "ok" ]; then
+            echo "Test passed: Output is 'ok'"
+          else
+            echo "Test failed: Output is '$output'"
+            exit 1
+          fi
         done
 
     - name: Run tests
