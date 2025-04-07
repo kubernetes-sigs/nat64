@@ -89,7 +89,7 @@ With all of these ideas I came up with this solution that basically goes as:
 
 ## Install
 
-Just do `kubectl apply -f https://raw.githubusercontent.com/aojea/nat64/main/install.yaml`
+Just do `kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/nat64/refs/heads/main/install.yaml`
 
 
 ## Development
@@ -154,6 +154,7 @@ This is far to be complete, features and suggestions are welcome:
 ## Contributors
 
 @siwiutki
+@ampanasiuk
 
 ## References
 
