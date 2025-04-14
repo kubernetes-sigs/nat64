@@ -4,7 +4,7 @@ set -eu
 
 function setup_suite {
   # Build the nat64 project
-  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/.. --output=type=docker
+  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/../.. --load
 
   # Define the name of the kind cluster
   export CLUSTER_NAME="nat64-test-cluster"
@@ -14,10 +14,10 @@ function setup_suite {
     return
   fi
 
-  kind create cluster --wait 1m --retain --name "$CLUSTER_NAME" --config="$BATS_TEST_DIRNAME"/../kind-ipv6.yaml
+  kind create cluster --wait 1m --retain --name "$CLUSTER_NAME" --config="$BATS_TEST_DIRNAME"/../../kind-ipv6.yaml
   # Install nat64
   kind load docker-image registry.k8s.io/networking/nat64:test --name "$CLUSTER_NAME"
-  nat64_install=$(sed 's#registry.k8s.io/networking/nat64.*#registry.k8s.io/networking/nat64:test#' < "$BATS_TEST_DIRNAME"/../install.yaml)
+  nat64_install=$(sed 's#registry.k8s.io/networking/nat64.*#registry.k8s.io/networking/nat64:test#' < "$BATS_TEST_DIRNAME"/../../install.yaml)
   printf '%s' "${nat64_install}" | kubectl apply -f -
   kubectl wait --for=condition=ready pods --namespace=kube-system -l k8s-app=nat64
 
@@ -37,6 +37,6 @@ function setup_suite {
 }
 
 function teardown_suite {
-  kind export logs "$BATS_TEST_DIRNAME"/../_artifacts --name "$CLUSTER_NAME"
-  kind delete cluster --name "$CLUSTER_NAME"
+    kind export logs "$BATS_TEST_DIRNAME"/../../_artifacts --name "$CLUSTER_NAME"
+    kind delete cluster --name "$CLUSTER_NAME"
 }
