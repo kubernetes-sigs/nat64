@@ -29,6 +29,8 @@ limitations under the License.
 #include <bpf/bpf_helpers.h>
 #include <maps.h>
 
+struct ipv6_metrics_t ipv6_metrics SEC(".maps");
+
 
 // all constants here are overriden from user-space level
 volatile const uint32_t IPV4_SNAT_PREFIX = 0xA9FE4000; // 169.254.64.0;
