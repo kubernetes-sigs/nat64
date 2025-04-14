@@ -87,5 +87,5 @@ spec:
         securityContext:
           privileged: true
           capabilities:
-            add: ["NET_ADMIN"]
+            add: ["NET_ADMIN", "BPF"]
 ---
