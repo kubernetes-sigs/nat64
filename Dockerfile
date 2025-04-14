@@ -27,6 +27,8 @@ ARG GOARCH="amd64"
 ARG GOOS=linux
 ENV CGO_ENABLED=0
 
+WORKDIR /go/src/app/metrics
+COPY ./metrics/metrics.go ./
 WORKDIR /go/src/app
 COPY ./main.go ./go.mod ./go.sum ./
 RUN go mod download

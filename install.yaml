@@ -57,6 +57,13 @@ spec:
       - operator: Exists
         effect: NoSchedule
       serviceAccountName: nat64
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: DoesNotExist
       containers:
       - name: nat64
         image: registry.k8s.io/networking/nat64:v0.2.1
@@ -87,5 +94,10 @@ spec:
         securityContext:
           privileged: true
           capabilities:
-            add: ["NET_ADMIN"]
+            add: ["NET_ADMIN", "BPF"]
+      volumes:
+      - hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
+        name: bpf-maps
 ---
