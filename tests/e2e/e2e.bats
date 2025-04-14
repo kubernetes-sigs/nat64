@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 @test "bpf metrics map works" {
-   output=$(kubectl \
+  output=$(kubectl \
       run -i test-bpfmap \
       --privileged \
       --image gke.gcr.io/debian-base \
@@ -9,8 +9,9 @@
       --command \
       -- sh -c "apt-get update > /dev/null && apt-get install xxd jq iputils-ping libcap2 bpftool -y --allow-change-held-packages > /dev/null; \
        ping -c 7 64:ff9b::8.8.8.8 > /dev/null; \
-       bpftool map -j dump name ipv6_metrics | \
+       bpftool map -j dump name ip64_metrics | \
       jq \".[] | to_entries[] | select(.key | startswith(\\\"elements\\\")).value | .[].formatted | select(.key.reason==0 and (.key.protocol==1)).value.count\"")
+  echo "$output"
   test "$output" = $'7'
 }
 

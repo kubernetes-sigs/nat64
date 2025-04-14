@@ -323,7 +323,7 @@ func main() {
     klog.Fatalf("error loading collection: %v", err)
   }
   defer obj.Close()
-  myMap := obj.Maps["ipv6_metrics"]
+  myMap := obj.Maps["ip64_metrics"]
   klog.Infof("Iterating maps")
   for n, _ := range obj.Maps{
     klog.Infof(n)
