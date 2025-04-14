@@ -30,6 +30,10 @@ jobs:
         run: |
           echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee -a /etc/sysctl.conf
           sudo sysctl -p
+      - name: Mount bpffs
+        shell: bash
+        run: |
+          sudo mount -t bpf bpffs /sys/fs/bpf
       - name: Setup Bats and bats libs
         id: setup-bats
         uses: bats-core/bats-action@3.0.0

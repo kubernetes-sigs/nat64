@@ -60,6 +60,11 @@ jobs:
         sudo sysctl -w net.ipv6.conf.all.forwarding=1
         sudo sysctl -w net.ipv4.ip_forward=1
 
+    - name: Mount bpffs
+      shell: bash
+      run: |
+        sudo mount -t bpf bpffs /sys/fs/bpf
+
     - name: Set up environment (download dependencies)
       run: |
         TMP_DIR=$(mktemp -d)
@@ -98,7 +103,13 @@ jobs:
         nodes:
         - role: control-plane
         - role: worker
+          extraMounts:
+          - hostPath: /sys/fs/bpf
+            containerPath: /sys/fs/bpf
         - role: worker
+          extraMounts:
+          - hostPath: /sys/fs/bpf
+            containerPath: /sys/fs/bpf
         kubeadmConfigPatches:
         - |
           kind: ClusterConfiguration
