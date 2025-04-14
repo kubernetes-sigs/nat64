@@ -19,9 +19,9 @@ env:
   KIND_CLUSTER_NAME: kind
 
 jobs:
-  bats_tests:
+  bats_e2e_tests:
     runs-on: ubuntu-latest
-    name: Install Bats and bats libs
+    name: Bats e2e tests
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -46,4 +46,26 @@ jobs:
         with:
           name: kind-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
           path: ./_artifacts
+ 
+  bats_integration_tests:
+    runs-on: ubuntu-latest
+    name: Bats integrations tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Bats and bats libs
+        id: setup-bats
+        uses: bats-core/bats-action@3.0.0
+      - name: Bats tests
+        shell: bash
+        env:
+         BATS_LIB_PATH: ${{ steps.setup-bats.outputs.lib-path }}
+         TERM: xterm
+        run: mkdir -p _artifacts && bats -o _artifacts tests/integration/
 
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
+          path: ./_artifacts
