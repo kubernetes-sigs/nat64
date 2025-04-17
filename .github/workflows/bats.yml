@@ -25,6 +25,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+      - name: Enable ICMP
+        shell: bash
+        run: |
+          echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee -a /etc/sysctl.conf
+          sudo sysctl -p
       - name: Setup Bats and bats libs
         id: setup-bats
         uses: bats-core/bats-action@3.0.0
@@ -34,11 +39,10 @@ jobs:
          BATS_LIB_PATH: ${{ steps.setup-bats.outputs.lib-path }}
          TERM: xterm
         run: mkdir -p _artifacts && bats -o _artifacts tests/
-
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kind-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
           path: ./_artifacts
- 
+

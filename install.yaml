@@ -63,6 +63,9 @@ spec:
         args:
         - "/nat64"
         - "--hostname=$(NODE_NAME)"
+        ports:
+        - name: "metrics"
+          containerPort: 8881
         env:
         - name: NODE_NAME
           valueFrom:
