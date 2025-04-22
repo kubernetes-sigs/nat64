@@ -30,7 +30,7 @@ ENV CGO_ENABLED=0
 WORKDIR /go/src/app
 COPY ./main.go ./go.mod ./go.sum ./
 RUN go mod download
-RUN CGO_ENABLED=0 go build -o /go/bin/nat64 .
+RUN CGO_ENABLED=0 go build -o /go/bin/nat64 -tags=netgo,osusergo .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=ebpf-builder --chown=root:root /go/src/app/bpf/nat64.o /bpf/nat64.o
