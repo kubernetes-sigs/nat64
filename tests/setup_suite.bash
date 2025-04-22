@@ -4,7 +4,7 @@ set -eu
 
 function setup_suite {
   # Build the nat64 project
-  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/.. --load
+  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/.. --output=type=docker
 
   # Define the name of the kind cluster
   export CLUSTER_NAME="nat64-test-cluster"
@@ -21,7 +21,7 @@ function setup_suite {
   printf '%s' "${nat64_install}" | kubectl apply -f -
   kubectl wait --for=condition=ready pods --namespace=kube-system -l k8s-app=nat64
 
-  # Use Google Public DNS64 https://developers.google.com/speed/public-dns/docs/dns64 
+  # Use Google Public DNS64 https://developers.google.com/speed/public-dns/docs/dns64
   original_coredns=$(kubectl get -oyaml -n=kube-system configmap/coredns)
   echo "Original CoreDNS config:"
   echo "${original_coredns}"
@@ -37,6 +37,6 @@ function setup_suite {
 }
 
 function teardown_suite {
-    kind export logs "$BATS_TEST_DIRNAME"/../_artifacts --name "$CLUSTER_NAME"
-    kind delete cluster --name "$CLUSTER_NAME"
+  kind export logs "$BATS_TEST_DIRNAME"/../_artifacts --name "$CLUSTER_NAME"
+  kind delete cluster --name "$CLUSTER_NAME"
 }
