@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -26,10 +28,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cilium/ebpf"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/nftables"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 )
 
 type testSetup struct {
@@ -159,6 +163,65 @@ func setupWithNat64IfUp(t *testing.T) (setup testSetup, link netlink.Link, clean
 	return setup, link, cleanup
 }
 
+func setupWithLoadedBpf(t *testing.T) (setup testSetup, link netlink.Link, coll *ebpf.Collection, cleanup func()) {
+	t.Helper()
+
+	if _, err := os.Stat(bpfProgram); errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s does not exist, run make build first", bpfProgram)
+	}
+
+	setup, link, cleanup = setupWithNat64IfUp(t)
+
+	spec, err := ebpf.LoadCollectionSpec(bpfProgram)
+	if err != nil {
+		cleanup()
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	err = spec.RewriteConstants(map[string]interface{}{
+		// This is the range that is used to replace the original
+		// IPv6 address, so it can be masquerade later with the
+		// external IPv4 address.
+		"IPV4_SNAT_PREFIX": binary.BigEndian.Uint32(setup.v4net.IP),
+		"IPV4_SNAT_MASK":   binary.BigEndian.Uint32(setup.v4net.Mask),
+
+		// NAT64 prefix, typically the well known prefix 64:ff9b::/96
+		// no need to hold IPV6_NAT_PREFIX_3 and IPV6_NAT_MASK_3
+		// last 4 bytes are reserved for embedding IPv4 address
+		"IPV6_NAT64_PREFIX_0": binary.BigEndian.Uint32(setup.v6net.IP[0:4]),
+		"IPV6_NAT64_PREFIX_1": binary.BigEndian.Uint32(setup.v6net.IP[4:8]),
+		"IPV6_NAT64_PREFIX_2": binary.BigEndian.Uint32(setup.v6net.IP[8:12]),
+
+		"IPV6_NAT64_MASK_0": binary.BigEndian.Uint32(setup.v6net.Mask[0:4]),
+		"IPV6_NAT64_MASK_1": binary.BigEndian.Uint32(setup.v6net.Mask[4:8]),
+		"IPV6_NAT64_MASK_2": binary.BigEndian.Uint32(setup.v6net.Mask[8:12]),
+
+		// IPv6 prefix used by Pods
+		"POD_PREFIX_0": binary.BigEndian.Uint32(setup.podnet.IP[0:4]),
+		"POD_PREFIX_1": binary.BigEndian.Uint32(setup.podnet.IP[4:8]),
+		"POD_PREFIX_2": binary.BigEndian.Uint32(setup.podnet.IP[8:12]),
+		"POD_PREFIX_3": binary.BigEndian.Uint32(setup.podnet.IP[12:16]),
+
+		"POD_MASK_0": binary.BigEndian.Uint32(setup.podnet.Mask[0:4]),
+		"POD_MASK_1": binary.BigEndian.Uint32(setup.podnet.Mask[4:8]),
+		"POD_MASK_2": binary.BigEndian.Uint32(setup.podnet.Mask[8:12]),
+		"POD_MASK_3": binary.BigEndian.Uint32(setup.podnet.Mask[12:16]),
+	})
+	if err != nil {
+		cleanup()
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Instantiate a Collection from a CollectionSpec.
+	coll, err = ebpf.NewCollection(spec)
+	if err != nil {
+		cleanup()
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	return setup, link, coll, cleanup
+}
+
 func Test_syncRules(t *testing.T) {
 	setup, clean := setupTest(t)
 	defer clean()
@@ -244,7 +307,10 @@ func Test_checkHealth_InvalidWithLinkUp(t *testing.T) {
 	setup, _, clean := setupWithNat64IfUp(t)
 	defer clean()
 
-	expectedErrStr := `nftables ip6 rule installed by nat64 agent was not found
+	expectedErrStr := `expected 2 bpf filters for nat64 interface, got 0
+no nat64 filter defined for nat64 interface
+no nat46 filter defined for nat64 interface
+nftables ip6 rule installed by nat64 agent was not found
 nftables inet table kube-nat64 created by nat64 agent is broken`
 
 	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
@@ -374,6 +440,276 @@ func Test_checkNftInetRulePresent_InvalidEmptyNs(t *testing.T) {
 	err := checkNftInetRulePresent(setup.nftConn, setup.v4net, setup.gwIface)
 	if err == nil || err.Error() != expectedErrStr {
 		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkBpfFiltersCount_Valid(t *testing.T) {
+	_, link, coll, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	nat64, ok := coll.Programs["nat64"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat64 program on %s", bpfProgram)
+	}
+
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IPV6,
+			Priority:  1,
+		},
+		Fd:           nat64.FD(),
+		Name:         "nat64",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	nat46, ok := coll.Programs["nat46"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat46 program on %s", bpfProgram)
+	}
+
+	filter = &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IP,
+			Priority:  2,
+		},
+		Fd:           nat46.FD(),
+		Name:         "nat46",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	err = checkBpfFiltersCount(filters)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func Test_checkBpfFiltersCount_InvalidOneFilter(t *testing.T) {
+	_, link, coll, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	nat64, ok := coll.Programs["nat64"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat64 program on %s", bpfProgram)
+	}
+
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IPV6,
+			Priority:  1,
+		},
+		Fd:           nat64.FD(),
+		Name:         "nat64",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	expectedErrStr := "expected 2 bpf filters for nat64 interface, got 1"
+	err = checkBpfFiltersCount(filters)
+	if err.Error() != expectedErrStr {
+		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkBpfFiltersCount_InvalidNoFilters(t *testing.T) {
+	_, _, _, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	expectedErrStr := "expected 2 bpf filters for nat64 interface, got 0"
+	err = checkBpfFiltersCount(filters)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkBpfFilterNat64Present_Valid(t *testing.T) {
+	_, link, coll, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	nat64, ok := coll.Programs["nat64"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat64 program on %s", bpfProgram)
+	}
+
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IPV6,
+			Priority:  1,
+		},
+		Fd:           nat64.FD(),
+		Name:         "nat64",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	err = checkBpfFilterNat64Present(filters)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func Test_checkBpfFilterNat64Present_InvalidNoFilter(t *testing.T) {
+	_, _, _, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	expectedErrStr := "no nat64 filter defined for nat64 interface"
+	err = checkBpfFilterNat64Present(filters)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkBpfFilterNat46Present_Valid(t *testing.T) {
+	_, link, coll, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	nat46, ok := coll.Programs["nat46"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat46 program on %s", bpfProgram)
+	}
+
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IP,
+			Priority:  2,
+		},
+		Fd:           nat46.FD(),
+		Name:         "nat46",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	err = checkBpfFilterNat46Present(filters)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+
+}
+
+func Test_checkBpfFilterNat46Present_InvalidWrongFilter(t *testing.T) {
+	_, link, coll, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	nat64, ok := coll.Programs["nat64"]
+	if !ok {
+		t.Errorf("unexpected error: could not find tc/nat64 program on %s", bpfProgram)
+	}
+
+	filter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_IPV6,
+			Priority:  1,
+		},
+		Fd:           nat64.FD(),
+		Name:         "nat64",
+		DirectAction: true,
+	}
+
+	if err := netlink.FilterAdd(filter); err != nil {
+		if err := netlink.FilterReplace(filter); err != nil {
+			t.Errorf("unexpected error: replacing tc filter for interface %s: %v", link.Attrs().Name, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	expectedErrStr := "no nat46 filter defined for nat64 interface"
+	err = checkBpfFilterNat46Present(filters)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkBpfFilterNat46Present_InvalidNoFilter(t *testing.T) {
+	_, _, _, clean := setupWithLoadedBpf(t)
+	defer clean()
+
+	filters, err := checkAndGetFilters()
+	if err != nil {
+		t.Errorf("unexpected checkAndGetFilters error: %v", err)
+	}
+
+	expectedErrStr := "no nat46 filter defined for nat64 interface"
+	err = checkBpfFilterNat46Present(filters)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
 	}
 }
 

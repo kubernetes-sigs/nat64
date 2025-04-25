@@ -464,10 +464,15 @@ func checkHealth(nftConn *nftables.Conn, natV4Range, natV6Range *net.IPNet, gwIf
 		}
 	}
 
-	// TODO: implement checks for bpf filters and routes
-
-	_, err := checkAndGetFilters()
+	filters, err := checkAndGetFilters()
 	handleError(err)
+	if err == nil {
+		handleError(checkBpfFiltersCount(filters))
+		handleError(checkBpfFilterNat64Present(filters))
+		handleError(checkBpfFilterNat46Present(filters))
+	}
+
+	// TODO: add check for routes installed on nat64 interface
 
 	handleError(checkNftIp6RulePresent(nftConn, natV6Range))
 	handleError(checkNftInetRulePresent(nftConn, natV4Range, gwIface))
@@ -493,6 +498,55 @@ func checkAndGetFilters() ([]netlink.Filter, error) {
 		return nil, fmt.Errorf("cannot fetch filter list for nat64 interface: %w", err)
 	}
 	return filters, nil
+}
+
+func checkBpfFiltersCount(filters []netlink.Filter) error {
+	if len(filters) != 2 {
+		return fmt.Errorf("expected 2 bpf filters for nat64 interface, got %d", len(filters))
+	}
+	return nil
+}
+
+func checkBpfFilterNat64Present(filters []netlink.Filter) error {
+	// TODO: netlink library that we're using here does not have
+	//       any implementation for `tc filter get` equivalent, so for now
+	//       do simpler checks with small risk of false positive in case
+	//       some other party overwrites bpf filters on nat64 interface
+	//       with same set of protocols and priorities as we use;
+	//       ideally we want to also check filter names,
+	//       we could do it with netlink.FilterAdd, but it's
+	//       weird behavior for a health check to add new filters to interface
+	nat64Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IPV6 && filter.Attrs().Priority == 1 && filter.Type() == "bpf" {
+			nat64Present = true
+		}
+	}
+	if !nat64Present {
+		return fmt.Errorf("no nat64 filter defined for nat64 interface")
+	}
+	return nil
+}
+
+func checkBpfFilterNat46Present(filters []netlink.Filter) error {
+	// TODO: netlink library that we're using here does not have
+	//       any implementation for `tc filter get` equivalent, so for now
+	//       do simpler checks with small risk of false positive in case
+	//       some other party overwrites bpf filters on nat64 interface
+	//       with same set of protocols and priorities as we use;
+	//       ideally we want to also check filter names,
+	//       we could do it with netlink.FilterAdd, but it's
+	//       weird behavior for a health check to add new filters to interface
+	nat46Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IP && filter.Attrs().Priority == 2 && filter.Type() == "bpf" {
+			nat46Present = true
+		}
+	}
+	if !nat46Present {
+		return fmt.Errorf("no nat46 filter defined for nat64 interface")
+	}
+	return nil
 }
 
 func checkNftIp6RulePresent(nftConn *nftables.Conn, natV6Range *net.IPNet) error {
