@@ -464,7 +464,10 @@ func checkHealth(nftConn *nftables.Conn, natV4Range, natV6Range *net.IPNet, gwIf
 		}
 	}
 
-	// TODO: implement checks for iface up, bpf filters and routes
+	// TODO: implement checks for bpf filters and routes
+
+	_, err := checkAndGetFilters()
+	handleError(err)
 
 	handleError(checkNftIp6RulePresent(nftConn, natV6Range))
 	handleError(checkNftInetRulePresent(nftConn, natV4Range, gwIface))
@@ -473,6 +476,23 @@ func checkHealth(nftConn *nftables.Conn, natV4Range, natV6Range *net.IPNet, gwIf
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+func checkAndGetFilters() ([]netlink.Filter, error) {
+	link, err := netlink.LinkByName(nat64If)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch nat64 interface: %w", err)
+	}
+
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		return nil, fmt.Errorf("nat64 interface is down")
+	}
+
+	filters, err := netlink.FilterList(link, netlink.HANDLE_MIN_EGRESS)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch filter list for nat64 interface: %w", err)
+	}
+	return filters, nil
 }
 
 func checkNftIp6RulePresent(nftConn *nftables.Conn, natV6Range *net.IPNet) error {

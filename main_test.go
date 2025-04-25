@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/nftables"
+	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
 
@@ -119,6 +120,45 @@ func setupTest(t *testing.T) (setup testSetup, cleanup func()) {
 	return setup, cleanup
 }
 
+func setupWithNat64IfUp(t *testing.T) (setup testSetup, link netlink.Link, cleanup func()) {
+	t.Helper()
+
+	setup, cleanup = setupTest(t)
+
+	link = &netlink.Dummy{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: nat64If,
+			MTU:  originalMTU,
+		},
+	}
+	if err := netlink.LinkAdd(link); err != nil {
+		cleanup()
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	qdisc := &netlink.GenericQdisc{
+		QdiscAttrs: netlink.QdiscAttrs{
+			LinkIndex: link.Attrs().Index,
+			Handle:    netlink.MakeHandle(0xffff, 0),
+			Parent:    netlink.HANDLE_CLSACT,
+		},
+		QdiscType: "clsact",
+	}
+	if err := netlink.QdiscReplace(qdisc); err != nil {
+		cleanup()
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		if err := netlink.LinkSetUp(link); err != nil {
+			cleanup()
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+
+	return setup, link, cleanup
+}
+
 func Test_syncRules(t *testing.T) {
 	setup, clean := setupTest(t)
 	defer clean()
@@ -200,11 +240,25 @@ func Test_checkHealth_ValidAfterSyncs(t *testing.T) {
 	}
 }
 
+func Test_checkHealth_InvalidWithLinkUp(t *testing.T) {
+	setup, _, clean := setupWithNat64IfUp(t)
+	defer clean()
+
+	expectedErrStr := `nftables ip6 rule installed by nat64 agent was not found
+nftables inet table kube-nat64 created by nat64 agent is broken`
+
+	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
 func Test_checkHealth_InvalidEmptyNs(t *testing.T) {
 	setup, clean := setupTest(t)
 	defer clean()
 
-	expectedErrStr := `nftables ip6 rule installed by nat64 agent was not found
+	expectedErrStr := `cannot fetch nat64 interface: Link not found
+nftables ip6 rule installed by nat64 agent was not found
 nftables inet table kube-nat64 created by nat64 agent is broken`
 
 	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
