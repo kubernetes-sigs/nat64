@@ -180,6 +180,25 @@ func compareMultilineStringsIgnoreIndentation(str1, str2 string) bool {
 	return str1 == str2
 }
 
+func Test_checkHealth_ValidAfterSyncs(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := sync(setup.v4net, setup.v6net, setup.podnet)
+	if err != nil {
+		t.Errorf("sync failed: %v", err)
+	}
+	err = syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("syncRules fialed: %v", err)
+	}
+
+	err = checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
 func Test_validateNetworks(t *testing.T) {
 	tests := []struct {
 		name     string

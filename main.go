@@ -67,16 +67,16 @@ const (
 )
 
 var (
-	metricsBindAddress string
-	natV4Range         string
-	natV6Range         string
-	nat64If            string
-	podCIDR            string
-	hostname           string
+	serverBindAddress string
+	natV4Range        string
+	natV6Range        string
+	nat64If           string
+	podCIDR           string
+	hostname          string
 )
 
 func init() {
-	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0.0.0.0:8881", "The IP address and port for the metrics server to serve on, default 0.0.0.0:8881")
+	flag.StringVar(&serverBindAddress, "server-bind-address", "0.0.0.0:8881", "The IP address and port for the daemon server to serve on , default 0.0.0.0:8881")
 	flag.StringVar(&natV4Range, "nat-v4-cidr", "169.254.64.0/24", "The IPv4 CIDR used to source NAT the NAT64 addresses")
 	flag.StringVar(&natV6Range, "nat-v6-cidr", "64:ff9b::/96", "The IPv6 CIDR used for IPv4-Embedded IPv6 Address Prefix, default 64:ff9b::/96 (rfc6052)")
 	flag.StringVar(&nat64If, "iface", "nat64", "The name of the interfaces created in the system to implement NAT64")
@@ -131,9 +131,9 @@ func main() {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
 
-	_, _, err := net.SplitHostPort(metricsBindAddress)
+	_, _, err := net.SplitHostPort(serverBindAddress)
 	if err != nil {
-		klog.Fatalf("Wrong metrics-bind-address %s : %v", metricsBindAddress, err)
+		klog.Fatalf("Wrong server-bind-address %s : %v", serverBindAddress, err)
 	}
 
 	v4ip, v4net, err := net.ParseCIDR(natV4Range)
@@ -225,13 +225,6 @@ func main() {
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
 
-	// run metrics server
-	http.Handle("/metrics", promhttp.Handler())
-	go func() {
-		klog.Infof("starting metrics server listening in %s", metricsBindAddress)
-		http.ListenAndServe(metricsBindAddress, nil) // nolint:errcheck
-	}()
-
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		klog.Fatal("Removing memlock:", err)
@@ -256,6 +249,32 @@ func main() {
 	if err != nil {
 		klog.Fatalf("error syncing nftables rules: %v", err)
 	}
+
+	nftConn, err := nftables.New()
+	if err != nil {
+		klog.Fatalf("cannot open nftables connection to watch nftables rules for health check")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		err := checkHealth(nftConn, v4net, v6net, gwIface)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_, err = w.Write([]byte("ok"))
+		if err != nil {
+			klog.Fatalf("error writing HTTP response on health endpoint on successful health check")
+		}
+	})
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// run daemon server
+	go func() {
+		klog.Infof("starting daemon server listening in %s", serverBindAddress)
+		http.ListenAndServe(serverBindAddress, mux) // nolint:errcheck
+	}()
 
 	select {
 	case <-signalCh:
@@ -433,6 +452,11 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func checkHealth(nftConn *nftables.Conn, natV4Range, natV6Range *net.IPNet, gwIface string) error {
+	// TODO: implement checks
 	return nil
 }
 
