@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -196,6 +197,129 @@ func Test_checkHealth_ValidAfterSyncs(t *testing.T) {
 	err = checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func Test_checkHealth_InvalidEmptyNs(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	expectedErrStr := `nftables ip6 rule installed by nat64 agent was not found
+nftables inet table kube-nat64 created by nat64 agent is broken`
+
+	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkNftIp6RulePresent_ValidAfterSyncRules(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	err = checkNftIp6RulePresent(setup.nftConn, setup.v6net)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func Test_checkNftIp6RulePresent_InvalidDifferentCIDR(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	_, v6net, err := net.ParseCIDR("64:ee8a::/96")
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+
+	expectedErrStr := "nftables ip6 rule installed by nat64 agent was not found"
+	err = checkNftIp6RulePresent(setup.nftConn, v6net)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkNftIp6RulePresent_InvalidEmptyNs(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	expectedErrStr := "nftables ip6 rule installed by nat64 agent was not found"
+	err := checkNftIp6RulePresent(setup.nftConn, setup.v6net)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkNftInetRulePresent_ValidAfterSyncRules(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	err = checkNftInetRulePresent(setup.nftConn, setup.v4net, setup.gwIface)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+}
+
+func Test_checkNftInetRulePresent_InvalidDifferentGwIf(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
+	err = checkNftInetRulePresent(setup.nftConn, setup.v4net, "random-interface")
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkNftInetRulePresent_InvalidDifferentCIDR(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	_, v4net, err := net.ParseCIDR("190.166.0.0/18")
+	if err != nil {
+		t.Fatalf("unexpected error %v", err)
+	}
+
+	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
+	err = checkNftInetRulePresent(setup.nftConn, v4net, setup.gwIface)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
+	}
+}
+
+func Test_checkNftInetRulePresent_InvalidEmptyNs(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
+
+	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
+	err := checkNftInetRulePresent(setup.nftConn, setup.v4net, setup.gwIface)
+	if err == nil || err.Error() != expectedErrStr {
+		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
 	}
 }
 

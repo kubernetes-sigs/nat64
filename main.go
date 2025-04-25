@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"runtime/debug"
 	"time"
 
@@ -456,7 +457,57 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 }
 
 func checkHealth(nftConn *nftables.Conn, natV4Range, natV6Range *net.IPNet, gwIface string) error {
-	// TODO: implement checks
+	errs := []error{}
+	handleError := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// TODO: implement checks for iface up, bpf filters and routes
+
+	handleError(checkNftIp6RulePresent(nftConn, natV6Range))
+	handleError(checkNftInetRulePresent(nftConn, natV4Range, gwIface))
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func checkNftIp6RulePresent(nftConn *nftables.Conn, natV6Range *net.IPNet) error {
+	nftIp6Table := nftablesIp6Table()
+	nftIp6Chain := nftablesIp6Chain()
+	nftIp6Rule := nftablesIp6Rule(natV6Range)
+	rules, err := nftConn.GetRules(&nftIp6Table, &nftIp6Chain)
+	if err != nil {
+		return fmt.Errorf("cannot fetch nftables ip6 rules: %w", err)
+	}
+
+	ruleFound := false
+	for _, rule := range rules {
+		if rule != nil && nftablesRulesEqual(*rule, nftIp6Rule) {
+			ruleFound = true
+		}
+	}
+	if !ruleFound {
+		return fmt.Errorf("nftables ip6 rule installed by nat64 agent was not found")
+	}
+	return nil
+}
+
+func checkNftInetRulePresent(nftConn *nftables.Conn, natV4Range *net.IPNet, gwIface string) error {
+	nftInetTable := nftablesInetTable()
+	nftInetChain := nftablesInetChain()
+	nftInetRule := nftablesInetRule(natV4Range, gwIface)
+	rules, err := nftConn.GetRules(&nftInetTable, &nftInetChain)
+	if err != nil {
+		return fmt.Errorf("cannot fetch nftables inet rules: %w", err)
+	}
+
+	if len(rules) != 1 || rules[0] == nil || !nftablesRulesEqual(*rules[0], nftInetRule) {
+		return fmt.Errorf("nftables inet table %s created by nat64 agent is broken", tableName)
+	}
 	return nil
 }
 
@@ -590,6 +641,27 @@ func nftablesIp6Rule(natV6Range *net.IPNet) nftables.Rule {
 			&expr.Verdict{Kind: expr.VerdictKind(unix.NFT_RETURN)},
 		},
 	}
+}
+
+func nftablesRulesEqual(r1, r2 nftables.Rule) bool {
+	// zero out the counters for rule comparison
+	for i := range r1.Exprs {
+		_, ok := r1.Exprs[i].(*expr.Counter)
+		if ok {
+			r1.Exprs[i] = &expr.Counter{}
+		}
+	}
+	for i := range r2.Exprs {
+		_, ok := r2.Exprs[i].(*expr.Counter)
+		if ok {
+			r2.Exprs[i] = &expr.Counter{}
+		}
+	}
+
+	// all information about rule is basically encoded
+	// in rule.Exprs, which is a slice of interfaces,
+	// shallow equal checking won't do the job here
+	return reflect.DeepEqual(r1.Exprs, r2.Exprs)
 }
 
 // cleanup is best effort and deletes the NAT64 interface and the corresponding inftables rules
