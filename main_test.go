@@ -26,25 +26,101 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/nftables"
 	"github.com/vishvananda/netns"
 )
 
-func Test_syncRules(t *testing.T) {
+type testSetup struct {
+	v4net   *net.IPNet
+	v6net   *net.IPNet
+	podnet  *net.IPNet
+	gwIface string
+	nftConn *nftables.Conn
+}
+
+func setupTest(t *testing.T) (setup testSetup, cleanup func()) {
+	t.Helper()
+
+	var origns, newns *netns.NsHandle
+
+	runtime.LockOSThread()
+	cleanup = func() {
+		if newns != nil {
+			newns.Close() // nolint:errcheck
+		}
+		if origns != nil {
+			_ = netns.Set(*origns)
+			origns.Close() // nolint:errcheck
+		}
+		runtime.UnlockOSThread()
+	}
+
 	if os.Getuid() != 0 {
+		cleanup()
 		t.Skip("Test requires root privileges.")
 	}
 
 	_, v4net, err := net.ParseCIDR("192.168.0.0/18")
 	if err != nil {
+		cleanup()
 		t.Fatalf("unexpected error %v", err)
 	}
 
 	_, v6net, err := net.ParseCIDR("64:ff9b::/96")
 	if err != nil {
+		cleanup()
 		t.Fatalf("unexpected error %v", err)
 	}
 
-	gwIf := "eth0"
+	_, podnet, err := net.ParseCIDR("fd00:10:244::/112")
+	if err != nil {
+		cleanup()
+		t.Fatalf("unexpected error %v", err)
+	}
+
+	nftConn, err := nftables.New()
+	if err != nil {
+		cleanup()
+		t.Fatalf("unexpected error %v", err)
+	}
+
+	setup.v4net = v4net
+	setup.v6net = v6net
+	setup.podnet = podnet
+	setup.gwIface = "eth0"
+	setup.nftConn = nftConn
+
+	// Save the current network namespace
+	ns1, err := netns.Get()
+	if err != nil {
+		cleanup()
+		t.Fatal(err)
+	}
+	origns = &ns1
+
+	// Create a new network namespace
+	ns2, err := netns.New()
+	if err != nil {
+		cleanup()
+		t.Fatal(err)
+	}
+	newns = &ns2
+
+	// add a fake rule to masquerade all the traffic
+	//  ip6tables -t nat -A POSTROUTING -o lo -j MASQUERADE
+	cmd := exec.Command("ip6tables", "-t", "nat", "-A", "POSTROUTING", "-o", "lo", "-j", "MASQUERADE")
+	_, err = cmd.CombinedOutput()
+	if err != nil {
+		cleanup()
+		t.Fatalf("ip6tables error error = %v", err)
+	}
+
+	return setup, cleanup
+}
+
+func Test_syncRules(t *testing.T) {
+	setup, clean := setupTest(t)
+	defer clean()
 
 	expectedNftables := `# Warning: table ip6 nat is managed by iptables-nft, do not touch!
 table ip6 nat {
@@ -62,38 +138,12 @@ table inet kube-nat64 {
 }
 `
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	// Save the current network namespace
-	origns, err := netns.Get()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer origns.Close() // nolint:errcheck
-
-	// Create a new network namespace
-	newns, err := netns.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer newns.Close() // nolint:errcheck
-
-	// add a fake rule to masquerade all the traffic
-	//  ip6tables -t nat -A POSTROUTING -o lo -j MASQUERADE
-
-	cmd := exec.Command("ip6tables", "-t", "nat", "-A", "POSTROUTING", "-o", "lo", "-j", "MASQUERADE")
-	_, err = cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("ip6tables error error = %v", err)
-	}
-
-	err = syncRules(v4net, v6net, gwIf)
+	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
 	if err != nil {
 		t.Fatalf("error syncing nftables rules: %v", err)
 	}
 
-	cmd = exec.Command("nft", "list", "ruleset")
+	cmd := exec.Command("nft", "list", "ruleset")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("nft list table error = %v", err)
@@ -114,13 +164,11 @@ table inet kube-nat64 {
 	cmd = exec.Command("nft", "list", "table", "ip6", "nat")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("nft list ruleset unexpected eror")
+		t.Fatalf("nft list ruleset unexpected error")
 	}
-	if strings.Contains(string(out), v6net.String()) {
-		t.Errorf("unexpected rule on default table %s %s", v6net.String(), string(out))
+	if strings.Contains(string(out), setup.v6net.String()) {
+		t.Errorf("unexpected rule on default table %s %s", setup.v6net.String(), string(out))
 	}
-	// Switch back to the original namespace
-	_ = netns.Set(origns)
 }
 
 func compareMultilineStringsIgnoreIndentation(str1, str2 string) bool {
