@@ -14,7 +14,9 @@
 
 include ../Makefile.defs
 
-BPF = nat64.o
+BPF_OBJ = nat64.o
+TEST = nat64_test
+TEST_OBJ = $(TEST).o
 
 include ./Makefile.bpf
 
@@ -22,10 +24,18 @@ include ./Makefile.bpf
 
 all: bpf_all
 
-bpf_all: $(BPF)
+bpf_all: $(BPF_OBJ)
 
 build_all: force
 	$(MAKE) bpf_all
+
+BPF_TEST_FLAGS:=
+ifneq ($(shell id -u), 0)
+                BPF_TEST_FLAGS += -exec "sudo -E"
+endif
+
+test: $(TEST_OBJ)
+	$(QUIET)$(GO) test ./bpftest -bpf-test-path $(ROOT_DIR)/bpf -test $(TEST) $(BPF_TEST_FLAGS)
 
 clean:
 	rm -f *.o *.ll *.i *.s
