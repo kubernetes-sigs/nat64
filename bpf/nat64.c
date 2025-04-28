@@ -30,6 +30,7 @@ limitations under the License.
 #include <bpf/bpf_tracing.h>
 
 
+#ifndef TESTING
 // all constants here are overriden from user-space level
 volatile const uint32_t IPV4_SNAT_PREFIX;
 volatile const uint32_t IPV4_SNAT_MASK;
@@ -51,6 +52,32 @@ volatile const uint32_t POD_MASK_0;
 volatile const uint32_t POD_MASK_1;
 volatile const uint32_t POD_MASK_2;
 volatile const uint32_t POD_MASK_3;
+#else
+// 169.254.64.0/24
+volatile const uint32_t IPV4_SNAT_PREFIX = 0xa9fe4000;
+volatile const uint32_t IPV4_SNAT_MASK = 0xffffff00;
+
+// 64:ff9b::/96
+volatile const uint32_t IPV6_NAT64_PREFIX_0 = 0x64ff9b;
+volatile const uint32_t IPV6_NAT64_PREFIX_1 = 0;
+volatile const uint32_t IPV6_NAT64_PREFIX_2 = 0;
+
+volatile const uint32_t IPV6_NAT64_MASK_0 = 0xffffffff;
+volatile const uint32_t IPV6_NAT64_MASK_1 = 0xffffffff;
+volatile const uint32_t IPV6_NAT64_MASK_2 = 0xffffffff;
+
+// fd00:10:244::/120
+volatile const uint32_t POD_PREFIX_0 = 0xfd000010;
+volatile const uint32_t POD_PREFIX_1 = 0x244;
+volatile const uint32_t POD_PREFIX_2 = 0;
+volatile const uint32_t POD_PREFIX_3 = 0;
+
+volatile const uint32_t POD_MASK_0 = 0xffffffff;
+volatile const uint32_t POD_MASK_1 = 0xffffffff;
+volatile const uint32_t POD_MASK_2 = 0xffffffff;
+volatile const uint32_t POD_MASK_3 = 0xffffff00;
+#endif
+
 
 // Success error codes >= 0
 #define IP_NAT_OK             0
