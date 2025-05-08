@@ -61,10 +61,11 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU = 1500
-	bpfProgram  = "bpf/nat64.o"
-	tableName   = "kube-nat64"
-	commentRule = "kube-nat64-rule"
+	originalMTU  = 1500
+	bpfProgram   = "bpf/nat64.o"
+	tableName    = "kube-nat64"
+	commentRule  = "kube-nat64-rule"
+	syncInterval = 30 * time.Second
 )
 
 var (
@@ -275,6 +276,32 @@ func main() {
 	go func() {
 		klog.Infof("starting daemon server listening in %s", serverBindAddress)
 		http.ListenAndServe(serverBindAddress, mux) // nolint:errcheck
+	}()
+
+	go func() {
+		ticker := time.NewTicker(syncInterval)
+		defer ticker.Stop()
+		klog.Infof("Start auto sync nftables rules")
+
+		for {
+			if ctx.Err() != nil {
+				klog.Infof("Stopping auto sync")
+				return
+			}
+
+			if err := syncRules(v4net, v6net, gwIface); err != nil {
+				HealthErrorsTotal.Inc()
+			}
+
+			select {
+			case <-signalCh:
+			case <-ctx.Done():
+				klog.Infof("Stopping auto sync")
+				return
+			case <-ticker.C:
+				continue
+			}
+		}
 	}()
 
 	select {
