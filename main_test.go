@@ -19,7 +19,6 @@ package main
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -30,7 +29,6 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/nftables"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -41,7 +39,6 @@ type testSetup struct {
 	v6net   *net.IPNet
 	podnet  *net.IPNet
 	gwIface string
-	nftConn *nftables.Conn
 }
 
 func setupTest(t *testing.T) (setup testSetup, cleanup func()) {
@@ -84,17 +81,10 @@ func setupTest(t *testing.T) (setup testSetup, cleanup func()) {
 		t.Fatalf("unexpected error %v", err)
 	}
 
-	nftConn, err := nftables.New()
-	if err != nil {
-		cleanup()
-		t.Fatalf("unexpected error %v", err)
-	}
-
 	setup.v4net = v4net
 	setup.v6net = v6net
 	setup.podnet = podnet
 	setup.gwIface = "eth0"
-	setup.nftConn = nftConn
 
 	// Save the current network namespace
 	ns1, err := netns.Get()
@@ -294,150 +284,36 @@ func Test_checkHealth_ValidAfterSyncs(t *testing.T) {
 	}
 	err = syncRules(setup.v4net, setup.v6net, setup.gwIface)
 	if err != nil {
-		t.Errorf("syncRules fialed: %v", err)
+		t.Errorf("syncRules failed: %v", err)
 	}
 
-	err = checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
+	err = checkHealth()
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
 }
 
 func Test_checkHealth_InvalidWithLinkUp(t *testing.T) {
-	setup, _, clean := setupWithNat64IfUp(t)
+	_, _, clean := setupWithNat64IfUp(t)
 	defer clean()
 
 	expectedErrStr := `expected 2 bpf filters for nat64 interface, got 0
 no nat64 filter defined for nat64 interface
-no nat46 filter defined for nat64 interface
-nftables ip6 rule installed by nat64 agent was not found
-nftables inet table kube-nat64 created by nat64 agent is broken`
+no nat46 filter defined for nat64 interface`
 
-	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
+	err := checkHealth()
 	if err == nil || err.Error() != expectedErrStr {
 		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
 	}
 }
 
 func Test_checkHealth_InvalidEmptyNs(t *testing.T) {
-	setup, clean := setupTest(t)
+	_, clean := setupTest(t)
 	defer clean()
 
-	expectedErrStr := `cannot fetch nat64 interface: Link not found
-nftables ip6 rule installed by nat64 agent was not found
-nftables inet table kube-nat64 created by nat64 agent is broken`
+	expectedErrStr := `cannot fetch nat64 interface: Link not found`
 
-	err := checkHealth(setup.nftConn, setup.v4net, setup.v6net, setup.gwIface)
-	if err == nil || err.Error() != expectedErrStr {
-		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
-	}
-}
-
-func Test_checkNftIp6RulePresent_ValidAfterSyncRules(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	err = checkNftIp6RulePresent(setup.nftConn, setup.v6net)
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
-}
-
-func Test_checkNftIp6RulePresent_InvalidDifferentCIDR(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	_, v6net, err := net.ParseCIDR("64:ee8a::/96")
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-
-	expectedErrStr := "nftables ip6 rule installed by nat64 agent was not found"
-	err = checkNftIp6RulePresent(setup.nftConn, v6net)
-	if err == nil || err.Error() != expectedErrStr {
-		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
-	}
-}
-
-func Test_checkNftIp6RulePresent_InvalidEmptyNs(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	expectedErrStr := "nftables ip6 rule installed by nat64 agent was not found"
-	err := checkNftIp6RulePresent(setup.nftConn, setup.v6net)
-	if err == nil || err.Error() != expectedErrStr {
-		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
-	}
-}
-
-func Test_checkNftInetRulePresent_ValidAfterSyncRules(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	err = checkNftInetRulePresent(setup.nftConn, setup.v4net, setup.gwIface)
-	if err != nil {
-		t.Errorf("expected no error, got: %v", err)
-	}
-}
-
-func Test_checkNftInetRulePresent_InvalidDifferentGwIf(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
-	err = checkNftInetRulePresent(setup.nftConn, setup.v4net, "random-interface")
-	if err == nil || err.Error() != expectedErrStr {
-		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
-	}
-}
-
-func Test_checkNftInetRulePresent_InvalidDifferentCIDR(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	err := syncRules(setup.v4net, setup.v6net, setup.gwIface)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	_, v4net, err := net.ParseCIDR("190.166.0.0/18")
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-
-	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
-	err = checkNftInetRulePresent(setup.nftConn, v4net, setup.gwIface)
-	if err == nil || err.Error() != expectedErrStr {
-		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
-	}
-}
-
-func Test_checkNftInetRulePresent_InvalidEmptyNs(t *testing.T) {
-	setup, clean := setupTest(t)
-	defer clean()
-
-	expectedErrStr := fmt.Sprintf("nftables inet table %s created by nat64 agent is broken", tableName)
-	err := checkNftInetRulePresent(setup.nftConn, setup.v4net, setup.gwIface)
+	err := checkHealth()
 	if err == nil || err.Error() != expectedErrStr {
 		t.Errorf("invalid error, expected: %s, got: %v", expectedErrStr, err)
 	}
