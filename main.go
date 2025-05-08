@@ -60,23 +60,24 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU = 1500
-	bpfProgram  = "bpf/nat64.o"
-	tableName   = "kube-nat64"
-	commentRule = "kube-nat64-rule"
+	originalMTU  = 1500
+	bpfProgram   = "bpf/nat64.o"
+	tableName    = "kube-nat64"
+	commentRule  = "kube-nat64-rule"
+	syncInterval = 30 * time.Second
 )
 
 var (
-	metricsBindAddress string
-	natV4Range         string
-	natV6Range         string
-	nat64If            string
-	podCIDR            string
-	hostname           string
+	serverBindAddress string
+	natV4Range        string
+	natV6Range        string
+	nat64If           string
+	podCIDR           string
+	hostname          string
 )
 
 func init() {
-	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0.0.0.0:8881", "The IP address and port for the metrics server to serve on, default 0.0.0.0:8881")
+	flag.StringVar(&serverBindAddress, "server-bind-address", "0.0.0.0:8881", "The IP address and port for the daemon server to serve on , default 0.0.0.0:8881")
 	flag.StringVar(&natV4Range, "nat-v4-cidr", "169.254.64.0/24", "The IPv4 CIDR used to source NAT the NAT64 addresses")
 	flag.StringVar(&natV6Range, "nat-v6-cidr", "64:ff9b::/96", "The IPv6 CIDR used for IPv4-Embedded IPv6 Address Prefix, default 64:ff9b::/96 (rfc6052)")
 	flag.StringVar(&nat64If, "iface", "nat64", "The name of the interfaces created in the system to implement NAT64")
@@ -131,9 +132,9 @@ func main() {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
 
-	_, _, err := net.SplitHostPort(metricsBindAddress)
+	_, _, err := net.SplitHostPort(serverBindAddress)
 	if err != nil {
-		klog.Fatalf("Wrong metrics-bind-address %s : %v", metricsBindAddress, err)
+		klog.Fatalf("Wrong server-bind-address %s : %v", serverBindAddress, err)
 	}
 
 	v4ip, v4net, err := net.ParseCIDR(natV4Range)
@@ -225,13 +226,6 @@ func main() {
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
 
-	// run metrics server
-	http.Handle("/metrics", promhttp.Handler())
-	go func() {
-		klog.Infof("starting metrics server listening in %s", metricsBindAddress)
-		http.ListenAndServe(metricsBindAddress, nil) // nolint:errcheck
-	}()
-
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		klog.Fatal("Removing memlock:", err)
@@ -256,6 +250,52 @@ func main() {
 	if err != nil {
 		klog.Fatalf("error syncing nftables rules: %v", err)
 	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		err := checkHealth()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_, err = w.Write([]byte("ok"))
+		if err != nil {
+			klog.Fatalf("error writing HTTP response on health endpoint on successful health check")
+		}
+	})
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// run daemon server
+	go func() {
+		klog.Infof("starting daemon server listening in %s", serverBindAddress)
+		http.ListenAndServe(serverBindAddress, mux) // nolint:errcheck
+	}()
+
+	go func() {
+		ticker := time.NewTicker(syncInterval)
+		defer ticker.Stop()
+		klog.Infof("Start auto sync nftables rules")
+
+		for {
+			if ctx.Err() != nil {
+				klog.Infof("Stopping auto sync")
+				return
+			}
+
+			if err := syncRules(v4net, v6net, gwIface); err != nil {
+				klog.Fatalf("auto sync, syncRules error: %v", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				klog.Infof("Stopping auto sync")
+				return
+			case <-ticker.C:
+				continue
+			}
+		}
+	}()
 
 	select {
 	case <-signalCh:
@@ -436,6 +476,96 @@ func sync(v4net, v6net, podIPNet *net.IPNet) error {
 	return nil
 }
 
+func checkHealth() error {
+	errs := []error{}
+	handleError := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	filters, err := checkAndGetFilters()
+	handleError(err)
+	if err == nil {
+		handleError(checkBpfFiltersCount(filters))
+		handleError(checkBpfFilterNat64Present(filters))
+		handleError(checkBpfFilterNat46Present(filters))
+	}
+
+	// TODO: add check for routes installed on nat64 interface
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func checkAndGetFilters() ([]netlink.Filter, error) {
+	link, err := netlink.LinkByName(nat64If)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch nat64 interface: %w", err)
+	}
+
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		return nil, fmt.Errorf("nat64 interface is down")
+	}
+
+	filters, err := netlink.FilterList(link, netlink.HANDLE_MIN_EGRESS)
+	if err != nil {
+		return nil, fmt.Errorf("cannot fetch filter list for nat64 interface: %w", err)
+	}
+	return filters, nil
+}
+
+func checkBpfFiltersCount(filters []netlink.Filter) error {
+	if len(filters) < 2 {
+		return fmt.Errorf("expected at least 2 bpf filters for nat64 interface, got %d", len(filters))
+	}
+	return nil
+}
+
+func checkBpfFilterNat64Present(filters []netlink.Filter) error {
+	// TODO: netlink library that we're using here does not have
+	//       any implementation for `tc filter get` equivalent, so for now
+	//       do simpler checks with small risk of false positive in case
+	//       some other party overwrites bpf filters on nat64 interface
+	//       with same set of protocols and priorities as we use;
+	//       ideally we want to also check filter names,
+	//       we could do it with netlink.FilterAdd, but it's
+	//       weird behavior for a health check to add new filters to interface
+	nat64Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IPV6 && filter.Attrs().Priority == 1 && filter.Type() == "bpf" {
+			nat64Present = true
+		}
+	}
+	if !nat64Present {
+		return fmt.Errorf("no nat64 filter defined for nat64 interface")
+	}
+	return nil
+}
+
+func checkBpfFilterNat46Present(filters []netlink.Filter) error {
+	// TODO: netlink library that we're using here does not have
+	//       any implementation for `tc filter get` equivalent, so for now
+	//       do simpler checks with small risk of false positive in case
+	//       some other party overwrites bpf filters on nat64 interface
+	//       with same set of protocols and priorities as we use;
+	//       ideally we want to also check filter names,
+	//       we could do it with netlink.FilterAdd, but it's
+	//       weird behavior for a health check to add new filters to interface
+	nat46Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IP && filter.Attrs().Priority == 2 && filter.Type() == "bpf" {
+			nat46Present = true
+		}
+	}
+	if !nat46Present {
+		return fmt.Errorf("no nat46 filter defined for nat64 interface")
+	}
+	return nil
+}
+
 func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 	klog.V(2).Info("Syncing nat64 nftables rules")
 	nft, err := nftables.New()
@@ -443,21 +573,51 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 		return fmt.Errorf("nat64 failure, can not start nftables: %v", err)
 	}
 	// add + delete + add for flushing all the table
-	table := &nftables.Table{
+	table := nftablesInetTable()
+	nft.AddTable(&table)
+	nft.DelTable(&table)
+	nft.AddTable(&table)
+
+	chain := nftablesInetChain()
+	nft.AddChain(&chain)
+
+	rule := nftablesInetRule(natV4Range, gwIface)
+	nft.AddRule(&rule)
+	err = nft.Flush()
+	if err != nil {
+		return fmt.Errorf("error adding nftables rule for NAT64 masquerade %v", err)
+	}
+
+	nftIp6Rule := nftablesIp6Rule(natV6Range)
+	nft.InsertRule(&nftIp6Rule)
+	err = nft.Flush()
+	if err != nil {
+		klog.Infof("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
+	}
+	return nil
+}
+
+func nftablesInetTable() nftables.Table {
+	return nftables.Table{
 		Name:   tableName,
 		Family: nftables.TableFamilyINet,
 	}
-	nft.AddTable(table)
-	nft.DelTable(table)
-	nft.AddTable(table)
+}
 
-	chain := nft.AddChain(&nftables.Chain{
+func nftablesInetChain() nftables.Chain {
+	table := nftablesInetTable()
+	return nftables.Chain{
 		Name:     "postrouting",
-		Table:    table,
+		Table:    &table,
 		Type:     nftables.ChainTypeNAT,
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityRef(*nftables.ChainPriorityNATSource - 10),
-	})
+	}
+}
+
+func nftablesInetRule(natV4Range *net.IPNet, gwIface string) nftables.Rule {
+	table := nftablesInetTable()
+	chain := nftablesInetChain()
 
 	/*
 			nft --debug=netlink add rule inet kindnet-ipmasq postrouting ip saddr 10.0.0.0/18 meta oifname eth0 masquerade
@@ -473,9 +633,9 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 	*/
 
 	// masquerade IPv4 traffic that was NAT64 "masquerade traffic"
-	nft.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: chain,
+	return nftables.Rule{
+		Table: &table,
+		Chain: &chain,
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyNFPROTO, SourceRegister: false, Register: 0x1},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{unix.NFPROTO_IPV4}},
@@ -487,12 +647,28 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 			&expr.Masq{Random: false, FullyRandom: false, Persistent: false, ToPorts: false, RegProtoMin: 0x0, RegProtoMax: 0x0},
 			&expr.Counter{},
 		},
-	})
-	err = nft.Flush()
-	if err != nil {
-		return fmt.Errorf("error adding nftables rule for NAT64 masquerade %v", err)
 	}
+}
 
+func nftablesIp6Table() nftables.Table {
+	return nftables.Table{
+		Name:   "nat",
+		Family: nftables.TableFamilyIPv6,
+	}
+}
+
+func nftablesIp6Chain() nftables.Chain {
+	nftNatTable := nftablesIp6Table()
+	return nftables.Chain{
+		Table:    &nftNatTable,
+		Name:     "POSTROUTING",
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	}
+}
+
+func nftablesIp6Rule(natV6Range *net.IPNet) nftables.Rule {
 	// avoid any existing masquerading rules to masquerade the NAT64 traffic
 	// This is required to deal with some existing components like ip-masq-agent
 	/*
@@ -506,20 +682,11 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 	*/
 
 	// well known table and chain
-	nftNatTable := &nftables.Table{
-		Name:   "nat",
-		Family: nftables.TableFamilyIPv6,
-	}
-	nftPostroutingChain := &nftables.Chain{
-		Table:    nftNatTable,
-		Name:     "POSTROUTING",
-		Type:     nftables.ChainTypeNAT,
-		Hooknum:  nftables.ChainHookPostrouting,
-		Priority: nftables.ChainPriorityNATSource,
-	}
-	nft.InsertRule(&nftables.Rule{
-		Table:    nftNatTable,
-		Chain:    nftPostroutingChain,
+	nftNatTable := nftablesIp6Table()
+	nftPostroutingChain := nftablesIp6Chain()
+	return nftables.Rule{
+		Table:    &nftNatTable,
+		Chain:    &nftPostroutingChain,
 		UserData: userdata.AppendString(nil, userdata.TypeComment, commentRule),
 		Exprs: []expr.Any{
 			&expr.Payload{DestRegister: 0x1, Base: expr.PayloadBaseNetworkHeader, Offset: 24, Len: 16},
@@ -528,12 +695,7 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 			&expr.Counter{},
 			&expr.Verdict{Kind: expr.VerdictKind(unix.NFT_RETURN)},
 		},
-	})
-	err = nft.Flush()
-	if err != nil {
-		klog.Infof("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
 	}
-	return nil
 }
 
 // cleanup is best effort and deletes the NAT64 interface and the corresponding inftables rules

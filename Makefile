@@ -26,7 +26,6 @@ SUBDIRS := $(filter-out $(foreach dir,$(SUBDIRS),$(dir)/%),$(SUBDIRS))
 
 all: build
 
-# Builds all the components for Cilium by executing make in the respective sub directories.
 build: $(SUBDIRS)
 
 # Execute default make target(make all) for the provided subdirectory.
@@ -39,7 +38,7 @@ clean:
 
 force :;
 
-test:
+test: build
 	go test -v -count 1 -race ./...
 
 lint:

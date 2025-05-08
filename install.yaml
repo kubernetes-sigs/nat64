@@ -64,7 +64,7 @@ spec:
         - "/nat64"
         - "--hostname=$(NODE_NAME)"
         ports:
-        - name: "metrics"
+        - name: "server"
           containerPort: 8881
         env:
         - name: NODE_NAME
@@ -83,3 +83,4 @@ spec:
           capabilities:
             add: ["NET_ADMIN"]
 ---
+

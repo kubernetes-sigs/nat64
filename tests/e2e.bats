@@ -49,6 +49,20 @@
   done
 }
 
+@test "test health endpoint reports that daemon is healthy" {
+  for i in $(seq 1 5) ; do
+    echo "Test Pod $i"
+    output=$(kubectl \
+      run -i test-health$i \
+      --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
+      --overrides='{"spec": {"hostNetwork": true}}' \
+      --restart=Never \
+      --command \
+      -- sh -c "curl --silent localhost:8881/healthz")
+    test "$output" = "ok"
+  done
+}
+
 @test "test metric server is up and operating on host" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
