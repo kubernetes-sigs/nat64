@@ -61,10 +61,11 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU = 1500
-	bpfProgram  = "bpf/nat64.o"
-	tableName   = "kube-nat64"
-	commentRule = "kube-nat64-rule"
+	originalMTU  = 1500
+	bpfProgram   = "bpf/nat64.o"
+	tableName    = "kube-nat64"
+	commentRule  = "kube-nat64-rule"
+	syncInterval = 1 * time.Minute
 )
 
 var (
@@ -236,6 +237,11 @@ func main() {
 			return
 		}
 
+		if err := checkNAT64Interface(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		_, err = w.Write([]byte("ok"))
 		if err != nil {
 			klog.Infof("error writing HTTP response on health endpoint on successful health check")
@@ -271,8 +277,35 @@ func main() {
 	if err != nil {
 		klog.Fatalf("error syncing nftables rules: %v", err)
 	}
-
 	isHealthy.Store(true)
+
+	// sync rules periodically
+	ticker := time.NewTicker(syncInterval)
+	defer ticker.Stop()
+	klog.Infof("Start auto sync nftables rules")
+
+	go func() {
+		for {
+			if ctx.Err() != nil {
+				klog.Infof("Stopping auto sync")
+				return
+			}
+
+			if err := syncRules(v4net, v6net, gwIface); err != nil {
+				isHealthy.Store(false)
+			} else {
+				isHealthy.Store(true)
+			}
+
+			select {
+			case <-ctx.Done():
+				klog.Infof("Stopping auto sync")
+				return
+			case <-ticker.C:
+				continue
+			}
+		}
+	}()
 
 	select {
 	case <-signalCh:
@@ -719,4 +752,49 @@ func ifname(n string) []byte {
 	b := make([]byte, 16)
 	copy(b, []byte(n+"\x00"))
 	return b
+}
+
+func checkNAT64Interface() error {
+	var errorsList []error
+	link, err := netlink.LinkByName(nat64If)
+	if err != nil {
+		errorsList = append(errorsList, fmt.Errorf("cannot fetch nat64 interface: %w", err))
+	}
+
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		errorsList = append(errorsList, fmt.Errorf("nat64 interface is down"))
+	}
+
+	filters, err := netlink.FilterList(link, netlink.HANDLE_MIN_EGRESS)
+	if err != nil {
+		errorsList = append(errorsList, fmt.Errorf("cannot fetch filter list for nat64 interface: %w", err))
+	}
+	// TODO: netlink library that we're using here does not have
+	//       any implementation for `tc filter get` equivalent, so for now
+	//       do simpler checks with small risk of false positive in case
+	//       some other party overwrites bpf filters on nat64 interface
+	//       with same set of protocols and priorities as we use;
+	//       ideally we want to also check filter names,
+	//       we could do it with netlink.FilterAdd, but it's
+	//       weird behavior for a health check to add new filters to interface
+	nat64Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IPV6 && filter.Attrs().Priority == 1 && filter.Type() == "bpf" {
+			nat64Present = true
+		}
+	}
+	if !nat64Present {
+		errorsList = append(errorsList, fmt.Errorf("no nat64 filter defined for nat64 interface"))
+	}
+
+	nat46Present := false
+	for _, filter := range filters {
+		if filter.Attrs().Protocol == unix.ETH_P_IP && filter.Attrs().Priority == 2 && filter.Type() == "bpf" {
+			nat46Present = true
+		}
+	}
+	if !nat46Present {
+		errorsList = append(errorsList, fmt.Errorf("no nat46 filter defined for nat64 interface"))
+	}
+	return errors.Join(errorsList...)
 }
