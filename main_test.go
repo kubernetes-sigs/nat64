@@ -297,7 +297,7 @@ func Test_checkHealth_InvalidWithLinkUp(t *testing.T) {
 	_, _, clean := setupWithNat64IfUp(t)
 	defer clean()
 
-	expectedErrStr := `expected 2 bpf filters for nat64 interface, got 0
+	expectedErrStr := `expected at least 2 bpf filters for nat64 interface, got 0
 no nat64 filter defined for nat64 interface
 no nat46 filter defined for nat64 interface`
 
@@ -415,7 +415,7 @@ func Test_checkBpfFiltersCount_InvalidOneFilter(t *testing.T) {
 		t.Errorf("unexpected checkAndGetFilters error: %v", err)
 	}
 
-	expectedErrStr := "expected 2 bpf filters for nat64 interface, got 1"
+	expectedErrStr := "expected at least 2 bpf filters for nat64 interface, got 1"
 	err = checkBpfFiltersCount(filters)
 	if err.Error() != expectedErrStr {
 		t.Errorf("expected: %s, got: %v", expectedErrStr, err)
@@ -431,7 +431,7 @@ func Test_checkBpfFiltersCount_InvalidNoFilters(t *testing.T) {
 		t.Errorf("unexpected checkAndGetFilters error: %v", err)
 	}
 
-	expectedErrStr := "expected 2 bpf filters for nat64 interface, got 0"
+	expectedErrStr := "expected at least 2 bpf filters for nat64 interface, got 0"
 	err = checkBpfFiltersCount(filters)
 	if err == nil || err.Error() != expectedErrStr {
 		t.Errorf("expected: %s, got: %v", expectedErrStr, err)

@@ -288,7 +288,6 @@ func main() {
 			}
 
 			select {
-			case <-signalCh:
 			case <-ctx.Done():
 				klog.Infof("Stopping auto sync")
 				return
@@ -519,8 +518,8 @@ func checkAndGetFilters() ([]netlink.Filter, error) {
 }
 
 func checkBpfFiltersCount(filters []netlink.Filter) error {
-	if len(filters) != 2 {
-		return fmt.Errorf("expected 2 bpf filters for nat64 interface, got %d", len(filters))
+	if len(filters) < 2 {
+		return fmt.Errorf("expected at least 2 bpf filters for nat64 interface, got %d", len(filters))
 	}
 	return nil
 }
