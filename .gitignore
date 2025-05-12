@@ -75,3 +75,4 @@ dkms.conf
 
 # Go workspace file
 go.work
+_artifacts/
