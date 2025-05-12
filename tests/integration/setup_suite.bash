@@ -3,28 +3,11 @@
 set -eu
 
 function setup_suite {
-# Create 2 network namespaces
-sudo ip netns add NorthNS
-sudo ip netns add SouthNS
-
-# Connect the namespaces using a veth pair
-sudo ip link add name vethSouth type veth peer name vethNorth
-sudo ip link set netns NorthNS dev vethNorth
-sudo ip link set netns SouthNS dev vethSouth
-
-# Configure the namespaces network so they can reach each other
-sudo ip netns exec NorthNS ip link set up dev lo
-sudo ip netns exec NorthNS ip link set up dev vethNorth
-sudo ip netns exec NorthNS ip addr add 1.1.1.1/24 dev vethNorth
-
-sudo ip netns exec SouthNS ip link set up dev lo
-sudo ip netns exec SouthNS ip link set up dev vethSouth
-sudo ip netns exec SouthNS ip addr add 1.1.1.2/24 dev vethSouth
-  # test depend on external connectivity that can be very flaky
-  sleep 5
+  # Build the nat64 project
+  docker run -v "$BATS_TEST_DIRNAME"/../../bpf:/bpf silkeh/clang:17-bookworm clang -target bpf -I /bpf/include -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.o
+  export BPF_NAT64_PROG="$BATS_TEST_DIRNAME"/../../bpf/nat64.o
 }
 
 function teardown_suite {
-    kind export logs "$BATS_TEST_DIRNAME"/../../_artifacts --name "$CLUSTER_NAME"
-    kind delete cluster --name "$CLUSTER_NAME"
+  sudo rm "$BPF_NAT64_PROG"
 }
