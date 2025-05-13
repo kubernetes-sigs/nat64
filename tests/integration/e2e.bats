@@ -39,10 +39,25 @@ function setup() {
   sudo ip netns exec nsnat ip -6 addr add 64:ff9b::/96 dev nat64
   sudo ip netns exec nsnat ip addr add 169.254.169.0/24 dev nat64
 
+  # Do not get dropped as martian
+  sudo ip netns exec nsnat sysctl net.ipv4.conf.nat64.rp_filter=0
+  
   # Add masquerading
-  sudo ip netns exec nsnat nft add table ip nat64
-  sudo ip netns exec nsnat nft add chain ip nat64 POSTROUTING { type nat hook postrouting priority 100 \; }
-  sudo ip netns exec nsnat nft add rule ip nat64 POSTROUTING ip saddr 169.254.169.0/24 masquerade
+  sudo ip netns exec nsnat nft -f /dev/stdin <<EOF
+  table ip6 nat {
+       chain POSTROUTING {
+               type nat hook postrouting priority srcnat; policy accept;
+               ip6 daddr 64:ff9b::/96 counter return comment "kube-nat64-rule"
+               oifname "lo" counter masquerade
+       }
+}
+table inet kube-nat64 {
+       chain postrouting {
+               type nat hook postrouting priority srcnat - 10; policy accept;
+               ip saddr 169.254.0.0/16 masquerade
+       }
+}
+EOF
 
   # Enable forwarding
   sudo ip netns exec nsnat sysctl -w net.ipv6.conf.all.forwarding=1
@@ -50,24 +65,26 @@ function setup() {
   
   echo "Attaching eBPF program $BPF_NAT64_PROG to nat64 interface in nsnat..."
   sudo ip netns exec nsnat tc qdisc add dev nat64 clsact
-  sudo ip netns exec nsnat tc filter add dev nat64 ingress bpf direct-action obj "$BPF_NAT64_PROG" sec tc/nat64
-  sudo ip netns exec nsnat tc filter add dev nat64 egress bpf direct-action obj "$BPF_NAT64_PROG" sec tc/nat46
+  sudo ip netns exec nsnat tc filter add dev nat64 egress protocol ipv6 prio 1 bpf obj "$BPF_NAT64_PROG" sec tc/nat64 direct-action
+  sudo ip netns exec nsnat tc filter add dev nat64 egress protocol ip prio 2 bpf obj "$BPF_NAT64_PROG" sec tc/nat46 direct-action
 }
 
 function teardown() {
+  timeout 2 sudo cat /sys/kernel/debug/tracing/trace_pipe
   sudo ip netns del ns1
   sudo ip netns del ns2
   sudo ip netns del nsnat
 }
 
-@test "test curl works through nat64" {
+@test "test TCP works through nat64" {
   # setup a echo server
   sudo ip netns exec ns2 socat -v tcp-l:1234,fork exec:'/bin/cat' >/dev/null &
   PID=$!
+  sleep 1000
   # connect from the other namespace through NAT64
   for i in $(seq 1 5) ; do
     echo "Test Connect $i"
-    output=$(sudo ip netns exec ns1 bash -c "echo hola | socat -T3 stdio tcp:[64:ff9b::1.1.1.2]:1234")
+    output=$(sudo ip netns exec ns1 bash -c "echo hola | socat -T1 stdio tcp:[64:ff9b::1.1.1.2]:1234")
     test "$output" = "hola"
   done
   kill $PID
