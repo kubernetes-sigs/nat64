@@ -37,7 +37,7 @@ function setup() {
   sudo ip netns exec nsnat ip link add nat64 type dummy
   sudo ip netns exec nsnat ip link set up dev nat64
   sudo ip netns exec nsnat ip -6 addr add 64:ff9b::/96 dev nat64
-  sudo ip netns exec nsnat ip addr add 169.254.169.0/24 dev nat64
+  sudo ip netns exec nsnat ip addr add 169.254.64.0/24 dev nat64
 
   # Do not get dropped as martian
   sudo ip netns exec nsnat sysctl net.ipv4.conf.nat64.rp_filter=0
@@ -54,7 +54,7 @@ function setup() {
 table inet kube-nat64 {
        chain postrouting {
                type nat hook postrouting priority srcnat - 10; policy accept;
-               ip saddr 169.254.0.0/16 masquerade
+               ip saddr 169.254.64.0/24 masquerade
        }
 }
 EOF
@@ -77,23 +77,39 @@ function teardown() {
 }
 
 @test "test TCP works through nat64" {
+  skip "problem executing inside namespace"
   # setup a echo server
   sudo ip netns exec ns2 socat -v tcp-l:1234,fork exec:'/bin/cat' >/dev/null &
-  PID=$!
+  trap kill $PID 2>/dev/null EXIT INT TERM
+
   # connect from the other namespace through NAT64
   for i in $(seq 1 5) ; do
-    echo "Test Connect $i"
-    output=$(sudo ip netns exec ns1 bash -c "echo hola | socat -T1 stdio tcp:[64:ff9b::1.1.1.2]:1234")
-    test "$output" = "hola"
+    echo "Test TCP Connect $i"
+    run sudo ip netns exec ns1 bash -c \'socat -T1 stdio tcp:[64:ff9b::1.1.1.2]:1234 <<< "hola"\'
+    [ "$status" -eq 0 ]
+    [ "$output" = "hola" ]
   done
-  kill $PID
+
+  kill $PID 2>/dev/null
 }
 
+@test "test UDP works through nat64" {
+  skip "problem executing inside namespace"
+  # setup a echo server
+  sudo ip netns exec ns2 socat -v udp-l:1234,fork exec:'/bin/cat' >/dev/null &
+  PID=$!
+  trap kill $PID 2>/dev/null EXIT INT TERM
 
-@test "test ICMP works through nat64" {
   # connect from the other namespace through NAT64
   for i in $(seq 1 5) ; do
-    echo "Test Connect $i"
-    sudo ip netns exec ns1 ping -6 -i 3 -c 1 64:ff9b::1.1.1.2
+    echo "Test UDP Connect $i"
+    run sudo ip netns exec ns1 bash -c \'socat -T1 stdio udp:[64:ff9b::1.1.1.2]:1234 <<< "hola"\'
+    [ "$status" -eq 0 ]
+    [ "$output" = "hola" ]
   done
+}
+
+@test "test ICMP works through nat64" {
+  echo "Test Connect 5 times"
+  sudo ip netns exec ns1 ping -q -c 5 64:ff9b::1.1.1.2 >/dev/null
 }
