@@ -34,7 +34,7 @@ limitations under the License.
 volatile const uint32_t IPV4_SNAT_PREFIX = 0xA9FE4000; // 169.254.64.0;
 volatile const uint32_t IPV4_SNAT_MASK = 0xFFFFFF00; // /24 mask
 
-volatile const uint32_t IPV6_NAT64_PREFIX_0 = 0x0064FF9B;
+volatile const uint32_t IPV6_NAT64_PREFIX_0 = 0x0064FF9B; // default nat64 range
 volatile const uint32_t IPV6_NAT64_PREFIX_1;
 volatile const uint32_t IPV6_NAT64_PREFIX_2;
 
@@ -42,14 +42,14 @@ volatile const uint32_t IPV6_NAT64_MASK_0 = 0xFFFFFFFF;
 volatile const uint32_t IPV6_NAT64_MASK_1 = 0xFFFFFFFF;
 volatile const uint32_t IPV6_NAT64_MASK_2 = 0xFFFFFFFF;
 
-volatile const uint32_t POD_PREFIX_0;
+volatile const uint32_t POD_PREFIX_0 = 0x20010DB8; // 2001:0db8 is reserved for documentation purposes
 volatile const uint32_t POD_PREFIX_1;
 volatile const uint32_t POD_PREFIX_2;
 volatile const uint32_t POD_PREFIX_3;
 
-volatile const uint32_t POD_MASK_0;
-volatile const uint32_t POD_MASK_1;
-volatile const uint32_t POD_MASK_2;
+volatile const uint32_t POD_MASK_0 = 0xFFFFFFFF;
+volatile const uint32_t POD_MASK_1 = 0xFFFFFFFF;
+volatile const uint32_t POD_MASK_2 = 0xFFFFFFFF;
 volatile const uint32_t POD_MASK_3;
 
 // Success error codes >= 0
