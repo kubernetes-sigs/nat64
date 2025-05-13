@@ -19,12 +19,12 @@ function setup() {
   # Configure the namespaces network so they can reach each other
   sudo ip netns exec ns1 ip link set up dev lo
   sudo ip netns exec ns1 ip link set up dev veth1
-  sudo ip netns exec ns1 ip -6 addr add 2001:1:2:3:4::1/112 dev veth1
-  sudo ip netns exec ns1 ip -6 route add default via 2001:1:2:3:4::2
+  sudo ip netns exec ns1 ip -6 addr add 2001:db8::1/112 dev veth1
+  sudo ip netns exec ns1 ip -6 route add default via 2001:db8::2
 
   sudo ip netns exec nsnat ip link set up dev lo
   sudo ip netns exec nsnat ip link set up dev vethnat1
-  sudo ip netns exec nsnat ip -6 addr add 2001:1:2:3:4::2/112 dev vethnat1
+  sudo ip netns exec nsnat ip -6 addr add 2001:db8::2/112 dev vethnat1
 
   sudo ip netns exec nsnat ip link set up dev vethnat2
   sudo ip netns exec nsnat ip addr add 1.1.1.1/24 dev vethnat2
@@ -80,7 +80,6 @@ function teardown() {
   # setup a echo server
   sudo ip netns exec ns2 socat -v tcp-l:1234,fork exec:'/bin/cat' >/dev/null &
   PID=$!
-  sleep 1000
   # connect from the other namespace through NAT64
   for i in $(seq 1 5) ; do
     echo "Test Connect $i"
@@ -88,4 +87,13 @@ function teardown() {
     test "$output" = "hola"
   done
   kill $PID
+}
+
+
+@test "test ICMP works through nat64" {
+  # connect from the other namespace through NAT64
+  for i in $(seq 1 5) ; do
+    echo "Test Connect $i"
+    sudo ip netns exec ns1 ping -6 -i 3 -c 1 64:ff9b::1.1.1.2
+  done
 }
