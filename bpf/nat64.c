@@ -42,7 +42,7 @@ volatile const uint32_t IPV6_NAT64_MASK_0 = 0xFFFFFFFF;
 volatile const uint32_t IPV6_NAT64_MASK_1 = 0xFFFFFFFF;
 volatile const uint32_t IPV6_NAT64_MASK_2 = 0xFFFFFFFF;
 
-volatile const uint32_t POD_PREFIX_0 = 0x20010DB8; // 2001:0db8 is reserved for documentation purposes
+volatile const uint32_t POD_PREFIX_0 = 0x20010DB8; // 2001:db8 is reserved for documentation purposes
 volatile const uint32_t POD_PREFIX_1;
 volatile const uint32_t POD_PREFIX_2;
 volatile const uint32_t POD_PREFIX_3;
@@ -50,7 +50,7 @@ volatile const uint32_t POD_PREFIX_3;
 volatile const uint32_t POD_MASK_0 = 0xFFFFFFFF;
 volatile const uint32_t POD_MASK_1 = 0xFFFFFFFF;
 volatile const uint32_t POD_MASK_2 = 0xFFFFFFFF;
-volatile const uint32_t POD_MASK_3;
+volatile const uint32_t POD_MASK_3 = 0xFFFFFF00; // 112 mask
 
 // Success error codes >= 0
 #define IP_NAT_OK             0
