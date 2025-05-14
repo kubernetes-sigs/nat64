@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -73,6 +74,8 @@ var (
 	nat64If     string
 	podCIDR     string
 	hostname    string
+
+	isHealthy atomic.Bool
 )
 
 func init() {
@@ -225,11 +228,23 @@ func main() {
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
 
-	// run metrics server
-	http.Handle("/metrics", promhttp.Handler())
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if !isHealthy.Load() {
+			http.Error(w, "error found", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = w.Write([]byte("ok"))
+		if err != nil {
+			klog.Infof("error writing HTTP response on health endpoint on successful health check")
+		}
+	})
+	// run daemon server
 	go func() {
-		klog.Infof("starting metrics server listening in %s", bindAddress)
-		http.ListenAndServe(bindAddress, nil) // nolint:errcheck
+		klog.Infof("starting server listening in %s", bindAddress)
+		http.ListenAndServe(bindAddress, mux) // nolint:errcheck
 	}()
 
 	// Remove resource limits for kernels <5.11.
@@ -256,6 +271,8 @@ func main() {
 	if err != nil {
 		klog.Fatalf("error syncing nftables rules: %v", err)
 	}
+
+	isHealthy.Store(true)
 
 	select {
 	case <-signalCh:
@@ -531,7 +548,7 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 	})
 	err = nft.Flush()
 	if err != nil {
-		klog.Infof("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
+		return fmt.Errorf("error adding nftables rule for NAT64 masquerade on iptables chain %v", err)
 	}
 	return nil
 }
