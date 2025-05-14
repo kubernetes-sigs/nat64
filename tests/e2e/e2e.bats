@@ -64,7 +64,7 @@
 }
 
 @test "test missing nat64 interface restart the pod" {
-  docker exec -it "$CLUSTER_NAME-worker" ip link del nat64
+  docker exec "$CLUSTER_NAME-worker" ip link del nat64
   nat64_pod_name=$(kubectl get pods -n kube-system -l app=nat64 --field-selector spec.nodeName="$CLUSTER_NAME-worker" -o jsonpath='{.items[0].metadata.name}')
 
   echo "Getting initial restart count for $nat64_pod_name..."
@@ -91,13 +91,13 @@
   [ "$final_restarts" -gt "$initial_restarts" ]
   sleep 3
   # verify the interface is present
-  docker exec -it "$CLUSTER_NAME-worker" ip link show nat64
+  docker exec "$CLUSTER_NAME-worker" ip link show nat64
 
 }
 
 @test "test nftables rules are restored" {
-  docker exec -it "$CLUSTER_NAME-worker" nft delete table inet kube-nat64
-  docker exec -it "$CLUSTER_NAME-worker" nft delete chain ip6 nat POSTROUTING
+  docker exec "$CLUSTER_NAME-worker" nft delete table inet kube-nat64
+  docker exec "$CLUSTER_NAME-worker" nft delete chain ip6 nat POSTROUTING
 
   echo "Polling for table and rule restoration..."
   for i in $(seq 1 20); do
