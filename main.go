@@ -67,16 +67,16 @@ const (
 )
 
 var (
-	metricsBindAddress string
-	natV4Range         string
-	natV6Range         string
-	nat64If            string
-	podCIDR            string
-	hostname           string
+	bindAddress string
+	natV4Range  string
+	natV6Range  string
+	nat64If     string
+	podCIDR     string
+	hostname    string
 )
 
 func init() {
-	flag.StringVar(&metricsBindAddress, "metrics-bind-address", "0.0.0.0:8881", "The IP address and port for the metrics server to serve on, default 0.0.0.0:8881")
+	flag.StringVar(&bindAddress, "bind-address", "0.0.0.0:8881", "The IP address and port for the metrics and health server to serve on, default 0.0.0.0:8881")
 	flag.StringVar(&natV4Range, "nat-v4-cidr", "169.254.64.0/24", "The IPv4 CIDR used to source NAT the NAT64 addresses")
 	flag.StringVar(&natV6Range, "nat-v6-cidr", "64:ff9b::/96", "The IPv6 CIDR used for IPv4-Embedded IPv6 Address Prefix, default 64:ff9b::/96 (rfc6052)")
 	flag.StringVar(&nat64If, "iface", "nat64", "The name of the interfaces created in the system to implement NAT64")
@@ -131,9 +131,9 @@ func main() {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
 
-	_, _, err := net.SplitHostPort(metricsBindAddress)
+	_, _, err := net.SplitHostPort(bindAddress)
 	if err != nil {
-		klog.Fatalf("Wrong metrics-bind-address %s : %v", metricsBindAddress, err)
+		klog.Fatalf("Wrong metrics-bind-address %s : %v", bindAddress, err)
 	}
 
 	v4ip, v4net, err := net.ParseCIDR(natV4Range)
@@ -228,8 +228,8 @@ func main() {
 	// run metrics server
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
-		klog.Infof("starting metrics server listening in %s", metricsBindAddress)
-		http.ListenAndServe(metricsBindAddress, nil) // nolint:errcheck
+		klog.Infof("starting metrics server listening in %s", bindAddress)
+		http.ListenAndServe(bindAddress, nil) // nolint:errcheck
 	}()
 
 	// Remove resource limits for kernels <5.11.
