@@ -23,16 +23,105 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/vishvananda/netns"
 )
 
+var (
+	usernsEnabled bool
+	checkUserns   sync.Once
+)
+
+// execInUserns calls the go test binary again for the same test inside a user namespace where the
+// current user is the only one mapped, and it is mapped to root inside the userns. This gives us
+// permissions to create network namespaces and iptables rules without running as root on the host.
+// This must be only top-level statement in the test function. Do not nest this.
+// It will slightly defect the test log output as the test is entered twice
+func execInUserns(t *testing.T, f func(t *testing.T)) {
+	const subprocessEnvKey = `GO_SUBPROCESS_KEY`
+	if testIDString, ok := os.LookupEnv(subprocessEnvKey); ok && testIDString == "1" {
+		t.Run(`subprocess`, f)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0])
+	cmd.Args = []string{os.Args[0], "-test.run=" + t.Name() + "$", "-test.v=true"}
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, `-test.testlogfile=`) {
+			cmd.Args = append(cmd.Args, arg)
+		}
+	}
+	cmd.Env = append(os.Environ(),
+		subprocessEnvKey+"=1",
+	)
+	// Include sbin in PATH, as some commands are not found otherwise.
+	cmd.Env = append(cmd.Env, "PATH=/usr/local/sbin:/usr/sbin::/sbin:"+os.Getenv("PATH"))
+	cmd.Stdin = os.Stdin
+
+	// Map ourselves to root inside the userns.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:  syscall.CLONE_NEWUSER,
+		UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
+		GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
+	}
+
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func unpriviledUserns() bool {
+	checkUserns.Do(func() {
+		cmd := exec.Command("sleep", "1")
+
+		// Map ourselves to root inside the userns.
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags:  syscall.CLONE_NEWUSER,
+			UidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}},
+			GidMappings: []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}},
+		}
+		if err := cmd.Start(); err != nil {
+			// TODO: we can think userns is not supported if the "sleep" binary is not
+			// present. This is unlikely, we can do tricks like use /proc/self/exe as
+			// the binary to execute and ptrace, so it is never executed, but this seems
+			// good enough for the tests.
+			return
+		}
+		defer func() {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}()
+
+		usernsEnabled = true
+		return
+	})
+
+	return usernsEnabled
+}
+
 func Test_syncRules(t *testing.T) {
+	if unpriviledUserns() {
+		execInUserns(t, test_syncRules)
+		return
+	}
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges or unprivileged user namespaces")
+	}
+
 	if os.Getuid() != 0 {
 		t.Skip("Test requires root privileges.")
 	}
+	test_syncRules(t)
+}
+
+func test_syncRules(t *testing.T) {
 
 	_, v4net, err := net.ParseCIDR("192.168.0.0/18")
 	if err != nil {
@@ -88,9 +177,13 @@ table inet kube-nat64 {
 		t.Fatalf("ip6tables error error = %v", err)
 	}
 
-	err = syncRules(v4net, v6net, gwIf)
-	if err != nil {
-		t.Fatalf("error syncing nftables rules: %v", err)
+	// It is idemptotent
+	for i := 0; i < 5; i++ {
+		err = syncRules(v4net, v6net, gwIf)
+		if err != nil {
+			t.Fatalf("error syncing nftables rules: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	cmd = exec.Command("nft", "list", "ruleset")

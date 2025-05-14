@@ -261,7 +261,7 @@ func main() {
 	// sync nat64
 	cleanup()
 	klog.Infof("create NAT64 interface %s with networks %s and %s", nat64If, v4net.String(), v6net.String())
-	err = sync(v4net, v6net, podIPNet)
+	err = syncInterface(v4net, v6net, podIPNet)
 	if err != nil {
 		var verr *ebpf.VerifierError
 		if errors.As(err, &verr) {
@@ -321,10 +321,10 @@ func main() {
 	cleanup()
 }
 
-// sync creates the nat64 interface with the corresponding addresses
+// syncInterface creates the nat64 interface with the corresponding addresses
 // installs the ebpf program on the interface
 // installes corresponding nftables rules
-func sync(v4net, v6net, podIPNet *net.IPNet) error {
+func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	// Create the NAT64 interface if it does not exist
 	link, err := netlink.LinkByName(nat64If)
 	if link == nil || err != nil {
@@ -566,6 +566,18 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 		Type:     nftables.ChainTypeNAT,
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityNATSource,
+	}
+	rules, err := nft.GetRules(nftNatTable, nftPostroutingChain)
+	if err != nil {
+		// not a fatal error as it may not exist this table
+		klog.Infof("error getting nftables rules on default table %v", err)
+		return nil
+	}
+	// be careful to not duplicate nftables rules since this table is shared we can not dump and restore safely
+	for _, rule := range rules {
+		if comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment); ok && comment == commentRule {
+			return nil
+		}
 	}
 	nft.InsertRule(&nftables.Rule{
 		Table:    nftNatTable,
