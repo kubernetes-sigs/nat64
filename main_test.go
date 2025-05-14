@@ -100,7 +100,6 @@ func unpriviledUserns() bool {
 		}()
 
 		usernsEnabled = true
-		return
 	})
 
 	return usernsEnabled
