@@ -73,7 +73,7 @@ volatile const uint32_t POD_MASK_3 = 0xFFFFFF00; // 112 mask
 #define PACKET_HOST	0
 #define DEFAULT_MTU 1500
 
-#define DEBUG 1 // Define DEBUG as 1 for debug mode, 0 for production
+#define DEBUG 0 // Define DEBUG as 1 for debug mode, 0 for production
 
 
 static __always_inline __wsum csum_add(__wsum csum, __wsum addend) {
