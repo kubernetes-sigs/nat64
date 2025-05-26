@@ -1,5 +1,19 @@
 #!/usr/bin/env bats
 
+@test "bpf metrics map works" {
+   output=$(kubectl \
+      run -i test-bpfmap \
+      --privileged \
+      --image gke.gcr.io/debian-base \
+      --restart=Never \
+      --command \
+      -- sh -c "apt-get update > /dev/null && apt-get install xxd jq iputils-ping libcap2 bpftool -y --allow-change-held-packages > /dev/null; \
+       ping -c 7 64:ff9b::8.8.8.8 > /dev/null; \
+       bpftool map -j dump name ipv6_metrics | \
+      jq \".[] | to_entries[] | select(.key | startswith(\\\"elements\\\")).value | .[].formatted | select(.key.reason==0 and (.key.protocol==1)).value.count\"")
+  test "$output" = $'7'
+}
+
 @test "test curl works from Pods" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"

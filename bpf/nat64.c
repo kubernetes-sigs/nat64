@@ -27,7 +27,9 @@ limitations under the License.
 
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
+#include <maps.h>
+
+struct ipv6_metrics_t ipv6_metrics SEC(".maps");
 
 
 // all constants here are overriden from user-space level
@@ -500,6 +502,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP6->IP4: bpf_skb_load_bytes failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_ERROR, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
@@ -545,6 +548,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP6->IP4: bpf_skb_change_proto failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_ERROR, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
@@ -598,13 +602,16 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 				#ifdef DEBUG
 				bpf_printk("IP6->IP4: ICMP NAT not supported");
 				#endif
+				update_ipv6_metrics(NAT64_UNSUPPORTED, IPPROTO_ICMP);
 				return IP_NAT_NOT_SUPPORTED;
 			case ICMP_NAT_ERROR:
 				#ifdef DEBUG
 				bpf_printk("IP6->IP4: ICMP NAT returned error");
 				#endif
+				update_ipv6_metrics(NAT64_ERROR, IPPROTO_ICMP);
 				return IP_NAT_ERROR;
 			default:
+				update_ipv6_metrics(NAT64_SUCCESSFUL, IPPROTO_ICMP);
 				#ifdef DEBUG
 				bpf_printk("IP6->IP4: ICMP NAT returned undefined return code, please file a bug report");
 				#endif
@@ -618,6 +625,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 			#ifdef DEBUG
 			bpf_printk("IP6->IP4: UDP checksum replace failed with code: %d", ret);
 			#endif
+			update_ipv6_metrics(NAT64_ERROR, IPPROTO_UDP);
 			return IP_NAT_ERROR;
 		}
 		break;
@@ -627,6 +635,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 			#ifdef DEBUG
 			bpf_printk("IP6->IP4: TCP checksum replace failed with code: %d", ret);
 			#endif
+			update_ipv6_metrics(NAT64_ERROR, IPPROTO_TCP);
 			return IP_NAT_ERROR;
 		}
 		break;
@@ -634,6 +643,7 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP6->IP4: protocol not supported: %d", ip4.protocol);
 		#endif
+		update_ipv6_metrics(NAT64_UNSUPPORTED, IPPROTO_IP);
 		return IP_NAT_NOT_SUPPORTED;
 	}
 
@@ -645,12 +655,14 @@ static __always_inline int ip6_to_ip4(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP6->IP4: bpf_skb_store_bytes failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_UNSUPPORTED, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
 	#ifdef DEBUG
 	bpf_printk("IP6->IP4 packet: saddr: %pI4, daddr: %pI4", &ip4.saddr, &ip4.daddr);
 	#endif
+	update_ipv6_metrics(NAT64_SUCCESSFUL, ip4.protocol);
 	return IP_NAT_OK;
 }
 
@@ -669,6 +681,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP4->IP6: bpf_skb_load_bytes failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_ERROR, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
@@ -705,6 +718,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP4->IP6: bpf_skb_change_proto failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_ERROR, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
@@ -725,16 +739,19 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 				#ifdef DEBUG
 				bpf_printk("IP4->IP6: ICMP NAT not supported");
 				#endif
+				update_ipv6_metrics(NAT64_UNSUPPORTED, IPPROTO_ICMPV6);
 				return IP_NAT_NOT_SUPPORTED;
 			case ICMP_NAT_ERROR:
 				#ifdef DEBUG
 				bpf_printk("IP4->IP6: ICMP NAT returned error");
 				#endif
+				update_ipv6_metrics(NAT64_ERROR, IPPROTO_ICMPV6);
 				return IP_NAT_ERROR;
 			default:
 				#ifdef DEBUG
 				bpf_printk("IP4->IP6: ICMP NAT returned undefined return code, please file a bug report");
 				#endif
+				update_ipv6_metrics(NAT64_SUCCESSFUL, IPPROTO_ICMPV6);
 				return IP_NAT_UNDEFINED;
 			}
 		}
@@ -746,6 +763,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 			#ifdef DEBUG
 			bpf_printk("IP4->IP6: UDP checksum replace failed with code: %d", ret);
 			#endif
+			update_ipv6_metrics(NAT64_ERROR, IPPROTO_UDP);
 			return IP_NAT_ERROR;
 		}
 		break;
@@ -755,6 +773,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 			#ifdef DEBUG
 			bpf_printk("IP4->IP6: TCP checksum replace failed with code: %d", ret);
 			#endif
+			update_ipv6_metrics(NAT64_ERROR, IPPROTO_TCP);
 			return IP_NAT_ERROR;
 		}
 
@@ -763,6 +782,7 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP4->IP6: protocol not supported: %d", ip6.nexthdr);
 		#endif
+		update_ipv6_metrics(NAT64_UNSUPPORTED, IPPROTO_IP);
 		return IP_NAT_NOT_SUPPORTED;
 	}
 
@@ -773,12 +793,14 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 		#ifdef DEBUG
 		bpf_printk("IP4->IP6: bpf_skb_store_bytes failed with code: %d", ret);
 		#endif
+		update_ipv6_metrics(NAT64_ERROR, IPPROTO_IP);
 		return IP_NAT_ERROR;
 	}
 
 	#ifdef DEBUG
 	bpf_printk("IP4->IP6 packet: saddr: %pI6, daddr: %pI6", &ip6.saddr, &ip6.daddr);
 	#endif
+	update_ipv6_metrics(NAT64_SUCCESSFUL, ip6.nexthdr);
 	return IP_NAT_OK;
 }
 
