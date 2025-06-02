@@ -307,6 +307,58 @@ func main() {
 		}
 	}()
 
+  for true{
+//   obj, err := ebpf.LoadCollection(bpfProgram)
+  spec, err := ebpf.LoadCollectionSpec(bpfProgram)
+  if err != nil {
+    klog.Fatalf("error loading collection spec: %v", err)
+  }
+  obj, err := ebpf.NewCollectionWithOptions(
+    spec,
+    ebpf.CollectionOptions{
+        Maps: ebpf.MapOptions{
+          PinPath: "/sys/fs/bpf",
+  }});
+  if err != nil {
+    klog.Fatalf("error loading collection: %v", err)
+  }
+  defer obj.Close()
+  myMap := obj.Maps["ip64_metrics"]
+  klog.Infof("Iterating maps")
+  for n, _ := range obj.Maps{
+    klog.Infof(n)
+  }
+  if myMap == nil {
+    klog.Fatalf("map not found")
+  }
+  defer myMap.Close()
+
+type MyKeyType uint64
+type MyValueType uint64
+
+iter := myMap.Iterate()
+	if iter == nil {
+		klog.Fatalf("failed to get map iterator")
+	}
+	// Iterate through the map
+	var key MyKeyType
+	var value MyValueType
+	klog.Infof("start iterating eBPF map")
+	for iter.Next(&key, &value) {
+		klog.Infof("key: %v, value: %v\n", key, value)
+	}
+  klog.Info("done iterating eBPF map")
+	if err := iter.Err(); err != nil {
+		if err == ebpf.ErrIterationAborted {
+            klog.Infof("Iteration aborted (map modified during iteration).")
+		} else {
+			klog.Fatalf("failed to iterate map: %v", err)
+		}
+
+	}
+
+  time.Sleep(30 * time.Second)
+  }
 	select {
 	case <-signalCh:
 		klog.Infof("Exiting: received signal")
@@ -418,7 +470,11 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
-	coll, err := ebpf.NewCollection(spec)
+	coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+	  Maps: ebpf.MapOptions{
+	    PinPath: "/sys/fs/bpf",
+	  },
+	})
 	if err != nil {
 		return err
 	}

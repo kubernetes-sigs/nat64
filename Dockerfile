@@ -32,7 +32,8 @@ COPY ./main.go ./go.mod ./go.sum ./
 RUN go mod download
 RUN CGO_ENABLED=0 go build -o /go/bin/nat64 .
 
-FROM gcr.io/distroless/static-debian12
+#FROM gcr.io/distroless/static-debian12
+FROM debian
 COPY --from=ebpf-builder --chown=root:root /go/src/app/bpf/nat64.o /bpf/nat64.o
 COPY --from=builder --chown=root:root /go/bin/nat64 /nat64
 CMD ["/nat64"]

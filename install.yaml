@@ -60,9 +60,9 @@ spec:
       containers:
       - name: nat64
         image: registry.k8s.io/networking/nat64:v0.2.1
-        args:
-        - "/nat64"
-        - "--hostname=$(NODE_NAME)"
+        args: ["/bin/sh", "-c", "echo XXX mounting; echo XXX mounting. >&2; mount -t bpf bpffs /sys/fs/bpf; /nat64 --hostname=$(NODE_NAME)"]
+        #- "/nat64"
+        #- "--hostname=$(NODE_NAME)"
         ports:
         - name: "health-metrics"
           containerPort: 8881
@@ -87,5 +87,5 @@ spec:
         securityContext:
           privileged: true
           capabilities:
-            add: ["NET_ADMIN"]
+            add: ["NET_ADMIN", "BPF", "PERFMON"]
 ---
