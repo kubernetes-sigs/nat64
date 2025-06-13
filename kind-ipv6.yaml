@@ -6,6 +6,9 @@ networking:
 nodes:
 - role: control-plane
 - role: worker
+  extraMounts:
+  - hostPath: /sys/fs/bpf
+    containerPath: /sys/fs/bpf
 kubeadmConfigPatches:
 - |
   kind: ClusterConfiguration
