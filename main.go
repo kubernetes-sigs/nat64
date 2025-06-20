@@ -327,7 +327,7 @@ func main() {
 func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	// Create the NAT64 interface if it does not exist
 	link, err := netlink.LinkByName(nat64If)
-	if link == nil || err != nil {
+	if link == nil || err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		klog.Infof("NAT64 interface with name %s not found, creating it", nat64If)
 		link = &netlink.Dummy{
 			LinkAttrs: netlink.LinkAttrs{
@@ -342,7 +342,7 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 
 	// Configure IP addresses on the NAT64 interface if necessary
 	addresses, err := netlink.AddrList(link, netlink.FAMILY_V4)
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		return err
 	}
 
@@ -352,7 +352,7 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	addresses, err = netlink.AddrList(link, netlink.FAMILY_V6)
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		return err
 	}
 
@@ -602,7 +602,7 @@ func syncRules(natV4Range, natV6Range *net.IPNet, gwIface string) error {
 func cleanup() {
 	// Create the NAT64 interface if it does not exist
 	link, err := netlink.LinkByName(nat64If)
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		klog.Infof("could not find nat64 interface %s: %v", nat64If, err)
 	}
 
@@ -664,7 +664,7 @@ func cleanup() {
 
 func getDefaultGwIf() (string, error) {
 	routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		return "", err
 	}
 
@@ -769,8 +769,8 @@ func ifname(n string) []byte {
 func checkNAT64Interface() error {
 	var errorsList []error
 	link, err := netlink.LinkByName(nat64If)
-	if err != nil {
-		errorsList = append(errorsList, fmt.Errorf("cannot fetch nat64 interface: %w", err))
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
+		return fmt.Errorf("cannot fetch nat64 interface: %w", err)
 	}
 
 	if link.Attrs().Flags&net.FlagUp == 0 {
@@ -778,7 +778,7 @@ func checkNAT64Interface() error {
 	}
 
 	filters, err := netlink.FilterList(link, netlink.HANDLE_MIN_EGRESS)
-	if err != nil {
+	if err != nil && !errors.Is(err, netlink.ErrDumpInterrupted) {
 		errorsList = append(errorsList, fmt.Errorf("cannot fetch filter list for nat64 interface: %w", err))
 	}
 	// TODO: netlink library that we're using here does not have

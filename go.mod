@@ -7,8 +7,8 @@ require (
 	github.com/google/go-cmp v0.6.0
 	github.com/google/nftables v0.3.0
 	github.com/prometheus/client_golang v1.18.0
-	github.com/vishvananda/netlink v1.3.0
-	github.com/vishvananda/netns v0.0.4
+	github.com/vishvananda/netlink v1.3.1
+	github.com/vishvananda/netns v0.0.5
 	golang.org/x/sys v0.31.0
 	k8s.io/api v0.32.2
 	k8s.io/apimachinery v0.32.2
