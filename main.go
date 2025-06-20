@@ -771,6 +771,7 @@ func checkNAT64Interface() error {
 	link, err := netlink.LinkByName(nat64If)
 	if err != nil {
 		errorsList = append(errorsList, fmt.Errorf("cannot fetch nat64 interface: %w", err))
+		return errors.Join(errorsList...)
 	}
 
 	if link.Attrs().Flags&net.FlagUp == 0 {
