@@ -57,9 +57,17 @@ spec:
       - operator: Exists
         effect: NoSchedule
       serviceAccountName: nat64
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: DoesNotExist
       containers:
       - name: nat64
         image: registry.k8s.io/networking/nat64:v0.2.1
+#        args: ["/bin/sh", "-c", "echo XXX mounting; echo XXX mounting. >&2; mount -t bpf bpffs /sys/fs/bpf; /nat64 --hostname=$(NODE_NAME)"]
         args:
         - "/nat64"
         - "--hostname=$(NODE_NAME)"
@@ -87,5 +95,13 @@ spec:
         securityContext:
           privileged: true
           capabilities:
-            add: ["NET_ADMIN"]
+            add: ["NET_ADMIN", "BPF", "PERFMON"]
+        volumeMounts:
+          - mountPath: /sys/fs/bpf
+            name: bpf-maps
+      volumes:
+      - hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
+        name: bpf-maps
 ---
