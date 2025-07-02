@@ -1,11 +1,12 @@
 module github.com/aojea/nat64
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/cilium/ebpf v0.13.0
 	github.com/google/go-cmp v0.6.0
 	github.com/google/nftables v0.3.0
+	github.com/moby/sys/mountinfo v0.7.2
 	github.com/prometheus/client_golang v1.18.0
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5

@@ -87,5 +87,13 @@ spec:
         securityContext:
           privileged: true
           capabilities:
-            add: ["NET_ADMIN"]
+            add: ["NET_ADMIN", "BPF", "PERFMON"]
+        volumeMounts:
+          - mountPath: /sys/fs/bpf
+            name: bpf-maps
+      volumes:
+      - hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
+        name: bpf-maps
 ---

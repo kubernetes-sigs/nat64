@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -36,6 +37,8 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/userdata"
+	"github.com/moby/sys/mountinfo"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -61,11 +64,13 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU  = 1500
-	bpfProgram   = "bpf/nat64.o"
-	tableName    = "kube-nat64"
-	commentRule  = "kube-nat64-rule"
-	syncInterval = 1 * time.Minute
+	originalMTU   = 1500
+	bpfProgram    = "bpf/nat64.o"
+	tableName     = "kube-nat64"
+	commentRule   = "kube-nat64-rule"
+	syncInterval  = 1 * time.Minute
+	bpfMountPoint = "/sys/fs/bpf"
+	bpfFSType     = "bpf"
 )
 
 var (
@@ -126,6 +131,131 @@ func validateNetworks(v4nat64, v6nat64, podRange *net.IPNet) error {
 	return errors.Join(errorsList...)
 }
 
+type Nat64KeyType struct {
+	Reason   uint32
+	Protocol uint32
+}
+type Nat64MetricObj struct {
+	*Nat64KeyType
+	Count int64
+}
+
+type Nat64ValueType []uint64
+
+type Nat64ObjectCollector struct {
+	mapName    string
+	objects    map[string]*Nat64MetricObj
+	metricDesc *prometheus.Desc
+}
+
+func GetProtocolName(nextHeader int) string {
+	protocolNames := map[int]string{
+		0x01: "ICMP",
+		0x06: "TCP",
+		0x11: "UDP",
+		0x3a: "ICMPv6",
+	}
+	name, ok := protocolNames[nextHeader]
+	if !ok {
+		return "Unknown"
+	}
+	return name
+}
+
+func GetReason(res int) string {
+	reasons := map[int]string{
+		0:  "success",
+		-1: "unsupported",
+		-2: "error",
+		-3: "undefined",
+	}
+	name, ok := reasons[res]
+	if !ok {
+		return "Unknown"
+	}
+	return name
+}
+
+func NewNat64ObjectCollector(mapName string) *Nat64ObjectCollector {
+	return &Nat64ObjectCollector{
+		mapName: mapName,
+		objects: make(map[string]*Nat64MetricObj),
+		metricDesc: prometheus.NewDesc(
+			mapName,
+			"Packet count for each reason and protocol",
+			[]string{"reason", "protocol"},
+			nil,
+		),
+	}
+}
+
+func (oc *Nat64ObjectCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- oc.metricDesc
+}
+
+func (oc *Nat64ObjectCollector) Collect(ch chan<- prometheus.Metric) {
+	spec, err := ebpf.LoadCollectionSpec(bpfProgram)
+	if err != nil {
+		klog.Fatalf("error loading collection spec: %v", err)
+	}
+	obj, err := ebpf.NewCollectionWithOptions(
+		spec,
+		ebpf.CollectionOptions{
+			Maps: ebpf.MapOptions{
+				PinPath: bpfMountPoint,
+			}})
+	if err != nil {
+		klog.Fatalf("error loading collection: %v", err)
+	}
+	defer obj.Close()
+
+	ip64MetricsMap := obj.Maps[oc.mapName]
+	if ip64MetricsMap == nil {
+		klog.Infoln("map not found")
+		return
+	}
+
+	defer func() {
+		err := ip64MetricsMap.Close()
+		if err != nil {
+			klog.Infof("error closing ebpf map")
+		}
+	}()
+
+	iter := ip64MetricsMap.Iterate()
+	if iter == nil {
+		klog.Fatalf("failed to get map iterator")
+	}
+	// Iterate through the map
+	var key Nat64KeyType
+	var value Nat64ValueType
+
+	for iter.Next(&key, &value) {
+		var metricVal uint64
+		metricVal = 0
+		for _, num := range value {
+			metricVal += num
+		}
+		ch <- prometheus.MustNewConstMetric(
+			oc.metricDesc,
+			prometheus.CounterValue,
+			float64(metricVal),
+			GetReason(int(key.Reason)),
+			GetProtocolName(int(key.Protocol)),
+		)
+	}
+
+	if err := iter.Err(); err != nil {
+		if err == ebpf.ErrIterationAborted {
+			klog.Fatalf("Iteration aborted (map modified during iteration).")
+		} else {
+			klog.Fatalf("failed to iterate map: %v", err)
+		}
+
+	}
+
+}
+
 func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
@@ -134,6 +264,10 @@ func main() {
 	flag.VisitAll(func(f *flag.Flag) {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
+
+	if err := ensureBpfFsMounted(); err != nil {
+		klog.Fatalf("failed to mount BPF filesystem: %v", err)
+	}
 
 	_, _, err := net.SplitHostPort(bindAddress)
 	if err != nil {
@@ -228,6 +362,11 @@ func main() {
 		cancel()
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
+
+	ip64collector := NewNat64ObjectCollector("ip64_metrics")
+	prometheus.MustRegister(ip64collector)
+	ip46collector := NewNat64ObjectCollector("ip46_metrics")
+	prometheus.MustRegister(ip46collector)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -418,7 +557,11 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
-	coll, err := ebpf.NewCollection(spec)
+	coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: bpfMountPoint,
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -809,4 +952,53 @@ func checkNAT64Interface() error {
 		errorsList = append(errorsList, fmt.Errorf("no nat46 filter defined for nat64 interface"))
 	}
 	return errors.Join(errorsList...)
+}
+
+// ensureBpfFsMounted checks if the BPF filesystem is mounted at the standard location.
+// If not, it attempts to mount it.
+func ensureBpfFsMounted() error {
+	mounted, err := isBpfFsMounted()
+	if err != nil {
+		return fmt.Errorf("could not check if BPF filesystem is mounted: %w", err)
+	}
+
+	if mounted {
+		klog.Infoln("BPF filesystem already mounted at", bpfMountPoint)
+		return nil
+	}
+
+	klog.Infoln("BPF filesystem not mounted, attempting to mount it.")
+	return mountBpfFs()
+}
+
+// isBpfFsMounted returns true if the bpf filesystem is mounted at /sys/fs/bpf.
+func isBpfFsMounted() (bool, error) {
+	mounts, err := mountinfo.GetMounts(nil)
+	if err != nil {
+		return false, err
+	}
+
+	for _, m := range mounts {
+		if m.Mountpoint == bpfMountPoint && m.FSType == bpfFSType {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// mountBpfFs mounts the BPF filesystem.
+func mountBpfFs() error {
+	// Create the directory if it doesn't exist.
+	if err := os.MkdirAll(bpfMountPoint, 0755); err != nil {
+		return fmt.Errorf("could not create BPF mount point directory %s: %w", bpfMountPoint, err)
+	}
+
+	// Mount the BPF filesystem.
+	// The source and data arguments are typically "bpf" and empty respectively for BPF filesystems.
+	if err := syscall.Mount("bpf", bpfMountPoint, "bpf", 0, ""); err != nil {
+		return fmt.Errorf("failed to mount BPF filesystem at %s: %w", bpfMountPoint, err)
+	}
+
+	return nil
 }
