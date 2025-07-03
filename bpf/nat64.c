@@ -721,25 +721,25 @@ static __always_inline int ip4_to_ip6(struct __sk_buff *skb, const int ip_offset
 		ret = icmp4_to_icmp6(skb, l4_offset, pseudohdr_csum);
 		if (ret < 0) {
 			switch (ret) {
-				case NAT64_UNSUPPORTED:
-					#ifdef DEBUG
-					bpf_printk("IP4->IP6: ICMP NAT not supported");
-					#endif
-					update_ip46_metrics(NAT64_UNSUPPORTED, ip4.protocol);
-					return NAT64_UNSUPPORTED;
-				case NAT64_ERROR:
-					#ifdef DEBUG
-					bpf_printk("IP4->IP6: ICMP NAT returned error");
-					#endif
-					update_ip46_metrics(NAT64_ERROR, ip4.protocol);
-					return NAT64_ERROR;
-				default:
-					#ifdef DEBUG
-					bpf_printk("IP4->IP6: ICMP NAT returned undefined return code, please file a bug report");
-					#endif
-					update_ip46_metrics(NAT64_UNDEFINED, ip4.protocol);
-					return NAT64_UNDEFINED;
-				}
+			case NAT64_UNSUPPORTED:
+				#ifdef DEBUG
+				bpf_printk("IP4->IP6: ICMP NAT not supported");
+				#endif
+				update_ip46_metrics(NAT64_UNSUPPORTED, ip4.protocol);
+				return NAT64_UNSUPPORTED;
+			case NAT64_ERROR:
+				#ifdef DEBUG
+				bpf_printk("IP4->IP6: ICMP NAT returned error");
+				#endif
+				update_ip46_metrics(NAT64_ERROR, ip4.protocol);
+				return NAT64_ERROR;
+			default:
+				#ifdef DEBUG
+				bpf_printk("IP4->IP6: ICMP NAT returned undefined return code, please file a bug report");
+				#endif
+				update_ip46_metrics(NAT64_UNDEFINED, ip4.protocol);
+				return NAT64_UNDEFINED;
+			}
 		}
 
 		break;
