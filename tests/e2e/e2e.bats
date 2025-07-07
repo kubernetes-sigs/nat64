@@ -1,7 +1,6 @@
 #!/usr/bin/env bats
 
 @test "test curl works from Pods" {
-sleep 3600
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
     output=$(kubectl \
