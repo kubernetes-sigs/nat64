@@ -38,6 +38,7 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/userdata"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -312,19 +313,42 @@ func main() {
 		}
 	}()
 
-	defer metrics.Ip64map.Close()
-	defer metrics.Ip46map.Close()
+	Ip64PacketCount := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ip64_packets_count",
+			Help: "Packet count for each reason and protocol",
+		},
+		[]string{"reason", "protocol"},
+	)
+	Ip46PacketCount := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ip46_packets_count",
+			Help: "Packet count for each reason and protocol",
+		},
+		[]string{"reason", "protocol"},
+	)
+
+	prometheus.MustRegister(Ip64PacketCount)
+	prometheus.MustRegister(Ip46PacketCount)
+
+	Ip64map := metrics.LoadMap("ip64_metrics")
+	Ip46map := metrics.LoadMap("ip46_metrics")
+
+	defer Ip64map.Close()
+	defer Ip46map.Close()
 
 	metricsTicker := time.NewTicker(metricInterval)
 	defer metricsTicker.Stop()
 
+	klog.Infof("Start auto sync metrics")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		klog.Infof("collecting metrics")
 		for range metricsTicker.C {
-			metrics.ReadAndUpdatePacketCount(metrics.Ip64map, metrics.Ip64PacketCount)
-			metrics.ReadAndUpdatePacketCount(metrics.Ip46map, metrics.Ip46PacketCount)
+			metrics.ReadAndUpdatePacketCount(Ip64map, Ip64PacketCount)
+			metrics.ReadAndUpdatePacketCount(Ip46map, Ip46PacketCount)
 		}
 	}()
 

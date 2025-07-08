@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 @test "test curl works from Pods" {
+sleep 3600
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
     output=$(kubectl \
@@ -163,7 +164,7 @@
       --command \
       -- sh -c "
   apt-get update > /dev/null
-  apt-get install iputils-ping libcap2 curl -y --allow-change-held-packages > /dev/null
+  apt-get install libcap2 curl -y --allow-change-held-packages > /dev/null
   get_icmp6_count() {
     curl --silent localhost:8881/metrics | grep protocol=\\\"ICMPv6\\\" | cut -d ' ' -f2
   }
@@ -182,7 +183,7 @@
         -- sh -c "
     apt-get update > /dev/null
     apt-get install iputils-ping libcap2 curl -y --allow-change-held-packages > /dev/null
-    ping -c 7 64:ff9b::$ip_address
+    ping -c 7 64:ff9b::$ip_address > /dev/null
   "
   #gather metrics after the ping
   output_after=$(kubectl \
@@ -206,6 +207,9 @@
 
   output_before=$(echo "$output_before" | tr $'\n' ' ')
   output_after=$(echo "$output_after" | tr $'\n' ' ')
+
+  echo "$output_before"
+  echo "$output_after"
 
   IFS=" " read -r count_before_64 count_before_46 <<< "$output_before"
   IFS=" " read -r count_after_64 count_after_46 <<< "$output_after"

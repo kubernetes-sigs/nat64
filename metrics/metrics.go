@@ -18,35 +18,10 @@ const (
 )
 
 type Nat64KeyType struct {
-	Reason   int
-	Protocol int
+	Reason   uint32
+	Protocol uint32
 }
-type Nat64MetricObj struct {
-	*Nat64KeyType
-	Count int
-}
-
-type Nat64ValueType []uint64
-
-var (
-	Ip64PacketCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "packets_count",
-			Help: "Packet count for each reason and protocol",
-		},
-		[]string{"reason", "protocol"},
-	)
-	Ip46PacketCount = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "packets_count",
-			Help: "Packet count for each reason and protocol",
-		},
-		[]string{"reason", "protocol"},
-	)
-
-	Ip64map = LoadMap("ip64_metrics")
-	Ip46map = LoadMap("ip46_metrics")
-)
+type Nat64ValueType uint64
 
 func LoadMap(name string) *ebpf.Map {
 	spec, err := ebpf.LoadCollectionSpec(bpfProgram)
@@ -62,40 +37,37 @@ func LoadMap(name string) *ebpf.Map {
 	if err != nil {
 		klog.Fatalf("error loading collection: %v", err)
 	}
-	defer obj.Close()
 
 	return obj.Maps[name]
 }
 
 func ReadAndUpdatePacketCount(m *ebpf.Map, c *prometheus.CounterVec) {
-	aggregatedCounters := make(map[Nat64KeyType]int)
-
+	aggregatedCounters := make(map[Nat64KeyType]uint64)
 	iter := m.Iterate()
 
+	if iter == nil {
+		klog.Fatalf("failed to get map iterator")
+	}
+
 	var key Nat64KeyType
-	var values []Nat64MetricObj
+	var values []uint64
+
+	var total uint64
 
 	for iter.Next(&key, &values) {
-		var total int
 		for _, value := range values {
-			total += value.Count
+			total += value
 		}
 		aggregatedCounters[key] = total
 	}
+	if err := iter.Err(); err != nil {
+		klog.Infof("error during map iteration: %v", err)
+	}
 
 	for key, total := range aggregatedCounters {
-		c.With(prometheus.Labels{"reason": GetReason(key.Reason), "protocol": GetProtocolName(key.Protocol)}).Add(float64(total))
+		c.Reset()
+		c.With(prometheus.Labels{"reason": GetReason(int(key.Reason)), "protocol": GetProtocolName(int(key.Protocol))}).Add(float64(total))
 	}
-}
-func init() {
-	prometheus.MustRegister(Ip64PacketCount)
-	prometheus.MustRegister(Ip46PacketCount)
-}
-
-type Nat64ObjectCollector struct {
-	mapName    string
-	objects    map[string]*Nat64MetricObj
-	metricDesc *prometheus.Desc
 }
 
 func GetProtocolName(nextHeader int) string {
