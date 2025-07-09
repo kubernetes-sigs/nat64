@@ -3,12 +3,14 @@
 @test "test curl works from Pods" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    output=$(kubectl \
-      run -i test-curl$i \
+    kubectl \
+      run test-curl$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail")
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
+    kubectl wait --for=jsonpath='{.status.containerStatuses[0].state.terminated}' pod/test-curl$i --timeout=30s
+    output=$(kubectl logs test-curl$i)
     test "$output" = "ok"
   done
 }
@@ -26,12 +28,14 @@
   test ! -z $ip_address
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    output=$(kubectl \
-      run -i test-ping$i \
+    kubectl \
+      run test-ping$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --restart=Never \
       --command \
-      -- sh -c "ping -6 -c 1 64:ff9b::$ip_address -q >/dev/null && echo ok || echo fail")
+      -- sh -c "ping -6 -c 1 64:ff9b::$ip_address -q >/dev/null && echo ok || echo fail"
+    kubectl wait --for=jsonpath='{.status.containerStatuses[0].state.terminated}' pod/test-ping$i --timeout=30s
+    output=$(kubectl logs test-ping$i)
     test "$output" = "ok"
   done
 }
@@ -39,12 +43,14 @@
 @test "test dig works from Pods" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    output=$(kubectl \
-      run -i test-dig$i \
+    kubectl \
+      run test-dig$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --restart=Never \
       --command \
-      -- sh -c "dig @64:ff9b::8.8.8.8 www.google.com >/dev/null && echo ok || echo fail")
+      -- sh -c "dig @64:ff9b::8.8.8.8 www.google.com >/dev/null && echo ok || echo fail"
+    kubectl wait --for=jsonpath='{.status.containerStatuses[0].state.terminated}' pod/test-dig$i --timeout=30s
+    output=$(kubectl logs test-dig$i)
     test "$output" = "ok"
   done
 }
@@ -52,13 +58,15 @@
 @test "test metric server is up and operating on host" {
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    output=$(kubectl \
-      run -i test-metrics$i \
+    kubectl \
+      run test-metrics$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --overrides='{"spec": {"hostNetwork": true}}' \
       --restart=Never \
       --command \
-      -- sh -c "curl --silent localhost:8881/metrics | grep process_start_time_seconds >/dev/null && echo ok || echo fail")
+      -- sh -c "curl --silent localhost:8881/metrics | grep process_start_time_seconds >/dev/null && echo ok || echo fail"
+    kubectl wait --for=jsonpath='{.status.containerStatuses[0].state.terminated}' pod/test-metrics$i
+    output=$(kubectl logs test-metrics$i)
     test "$output" = "ok"
   done
 }
@@ -138,13 +146,15 @@
   # have IPv4 access
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
-    output=$(kubectl \
-      run -i test-curl-host$i \
+    kubectl \
+      run test-curl-host$i \
       --image registry.k8s.io/e2e-test-images/agnhost:2.39 \
       --overrides='{"spec": {"hostNetwork": true}}' \
       --restart=Never \
       --command \
-      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail")
+      -- sh -c "curl -6 --silent --output /dev/null www.google.com && echo ok || echo fail"
+    kubectl wait --for=jsonpath='{.status.containerStatuses[0].state.terminated}' pod/test-curl-host$i --timeout=30s
+    output=$(kubectl logs test-curl-host$i)
     test "$output" = "ok"
   done
 }
