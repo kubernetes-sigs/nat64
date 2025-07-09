@@ -9,8 +9,30 @@ nodes:
 kubeadmConfigPatches:
 - |
   kind: ClusterConfiguration
+  apiServer:
+    extraArgs:
+      "v": "4"
+  scheduler:
+    extraArgs:
+      "v": "4"
   controllerManager:
     extraArgs:
       node-cidr-mask-size-ipv6: "124" # default v4 nat64 range is 169.254.64.0/24
+      "v": "4"
   networking:
     podSubnet: "fd00:10:244::/112"
+  ---
+  kind: InitConfiguration
+  nodeRegistration:
+    kubeletExtraArgs:
+      "v": "4"
+      "container-log-max-files": "10"
+      "container-log-max-size": "100Mi"
+  ---
+  kind: JoinConfiguration
+  nodeRegistration:
+    kubeletExtraArgs:
+      "v": "4"
+      "container-log-max-files": "10"
+      "container-log-max-size": "100Mi"
+  
