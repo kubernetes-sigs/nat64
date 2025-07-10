@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 @test "test curl works from Pods" {
+sleep 3600
   for i in $(seq 1 5) ; do
     echo "Test Pod $i"
     kubectl \
@@ -157,4 +158,72 @@
     output=$(kubectl logs test-curl-host$i)
     test "$output" = "ok"
   done
+}
+
+@test "bpf metrics map works" {
+  default_interface=$(ip route | grep default | awk '{print $5}')
+  test ! -z $default_interface
+  ip_address=$(ip addr show "$default_interface" | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+  #gather metrics before the ping
+  output_before=$(kubectl \
+      run -i test-bpfmap \
+      --privileged \
+      --overrides='{"kind":"Pod", "apiVersion":"v1", "spec": {"hostNetwork":true}}' \
+      --image gke.gcr.io/debian-base \
+      --restart=Never \
+      --command \
+      -- sh -c "
+  apt-get update > /dev/null
+  apt-get install libcap2 curl -y --allow-change-held-packages > /dev/null
+  get_icmp6_count() {
+    curl --silent localhost:8881/metrics | grep protocol=\\\"ICMPv6\\\" | cut -d ' ' -f2
+  }
+  get_icmp_count() {
+      curl --silent localhost:8881/metrics | grep protocol=\\\"ICMP\\\" | cut -d ' ' -f2
+  }
+  get_icmp6_count
+  get_icmp_count")
+  # perform the ping
+  kubectl \
+        run -i test-bpfmap1 \
+        --privileged \
+        --image gke.gcr.io/debian-base \
+        --restart=Never \
+        --command \
+        -- sh -c "
+    apt-get update > /dev/null
+    apt-get install iputils-ping libcap2 curl -y --allow-change-held-packages > /dev/null
+    ping -c 7 64:ff9b::$ip_address > /dev/null
+  "
+  #gather metrics after the ping
+  output_after=$(kubectl \
+        run -i test-bpfmap2 \
+        --privileged \
+        --overrides='{"kind":"Pod", "apiVersion":"v1", "spec": {"hostNetwork":true}}' \
+        --image gke.gcr.io/debian-base \
+        --restart=Never \
+        --command \
+        -- sh -c "
+    apt-get update > /dev/null
+    apt-get install xxd jq iputils-ping libcap2 curl -y --allow-change-held-packages > /dev/null
+    get_icmp6_count() {
+      curl --silent localhost:8881/metrics | grep protocol=\\\"ICMPv6\\\" | cut -d ' ' -f2
+    }
+    get_icmp_count() {
+        curl --silent localhost:8881/metrics | grep protocol=\\\"ICMP\\\" | cut -d ' ' -f2
+    }
+    get_icmp6_count
+    get_icmp_count")
+
+  output_before=$(echo "$output_before" | tr $'\n' ' ')
+  output_after=$(echo "$output_after" | tr $'\n' ' ')
+
+  echo "$output_before"
+  echo "$output_after"
+
+  IFS=" " read -r count_before_64 count_before_46 <<< "$output_before"
+  IFS=" " read -r count_after_64 count_after_46 <<< "$output_after"
+
+  test $[count_after_64 - count_before_64] = 7
+  test $[count_after_46 - count_before_46] -ge 7
 }
