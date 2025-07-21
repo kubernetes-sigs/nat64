@@ -1,4 +1,4 @@
-module github.com/aojea/nat64
+module sigs.k8s.io/nat64
 
 go 1.23.0
 
