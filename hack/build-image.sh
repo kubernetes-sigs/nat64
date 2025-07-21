@@ -20,4 +20,4 @@ set -o errexit -o nounset -o pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "${REPO_ROOT}"
 
-docker build . -t aojea/nat64:"${1:-test}"
+docker build . -t sigs.k8s.io/nat64:"${1:-test}"
