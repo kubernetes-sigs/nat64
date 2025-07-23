@@ -36,6 +36,7 @@ import (
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/userdata"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -61,11 +62,12 @@ import (
 // xref: https://github.com/cilium/cilium/issues/23604
 
 const (
-	originalMTU  = 1500
-	bpfProgram   = "bpf/nat64.o"
-	tableName    = "kube-nat64"
-	commentRule  = "kube-nat64-rule"
-	syncInterval = 1 * time.Minute
+	originalMTU    = 1500
+	bpfProgram     = "bpf/nat64.o"
+	tableName      = "kube-nat64"
+	commentRule    = "kube-nat64-rule"
+	syncInterval   = 1 * time.Minute
+	metricInterval = 5 * time.Second
 )
 
 var (
@@ -75,6 +77,8 @@ var (
 	nat64If     string
 	podCIDR     string
 	hostname    string
+
+	metricsEnabled bool
 
 	isHealthy atomic.Bool
 )
@@ -129,13 +133,18 @@ func validateNetworks(v4nat64, v6nat64, podRange *net.IPNet) error {
 func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
-
+	err := EnsureBpfFsMounted()
+	metricsEnabled = true
+	if err != nil {
+		klog.Infof("Failed to mount bpf filesystem")
+		metricsEnabled = false
+	}
 	printVersion()
 	flag.VisitAll(func(f *flag.Flag) {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
 
-	_, _, err := net.SplitHostPort(bindAddress)
+	_, _, err = net.SplitHostPort(bindAddress)
 	if err != nil {
 		klog.Fatalf("Wrong metrics-bind-address %s : %v", bindAddress, err)
 	}
@@ -228,7 +237,6 @@ func main() {
 		cancel()
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
-
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +315,59 @@ func main() {
 		}
 	}()
 
+	if metricsEnabled {
+		Ip64PacketCount := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ip64_packets_count",
+				Help: "Packet count for each reason and protocol",
+			},
+			[]string{"status", "protocol"},
+		)
+		Ip46PacketCount := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ip46_packets_count",
+				Help: "Packet count for each reason and protocol",
+			},
+			[]string{"status", "protocol"},
+		)
+
+		prometheus.MustRegister(Ip64PacketCount)
+		prometheus.MustRegister(Ip46PacketCount)
+
+		Ip64map := LoadMap("ip64_metrics")
+		Ip46map := LoadMap("ip46_metrics")
+
+		defer func() {
+		        if Ip64map != nil {
+			  err = Ip64map.Close()
+			  if err != nil {
+				  klog.Infof("error closing map object")
+			  }
+			}
+		        if Ip64map != nil {
+			  err = Ip64map.Close()
+			  if err != nil {
+				  klog.Infof("error closing map object")
+			  }
+			}
+		}()
+
+		metricsTicker := time.NewTicker(metricInterval)
+		defer metricsTicker.Stop()
+
+		klog.Infof("Start auto sync metrics")
+		go func() {
+			for {
+				select {
+				case <-metricsTicker.C:
+					ReadAndUpdatePacketCount(Ip64map, Ip64PacketCount)
+					ReadAndUpdatePacketCount(Ip46map, Ip46PacketCount)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
 	select {
 	case <-signalCh:
 		klog.Infof("Exiting: received signal")
@@ -418,7 +479,11 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
-	coll, err := ebpf.NewCollection(spec)
+	coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: "/sys/fs/bpf",
+		},
+	})
 	if err != nil {
 		return err
 	}

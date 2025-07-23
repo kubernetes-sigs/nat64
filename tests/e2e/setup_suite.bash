@@ -4,7 +4,7 @@ set -eu
 
 function setup_suite {
   # Build the nat64 project
-  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/../.. --load
+  docker build -t registry.k8s.io/networking/nat64:test -f Dockerfile "$BATS_TEST_DIRNAME"/../.. --output=type=docker
 
   # Define the name of the kind cluster
   export CLUSTER_NAME="nat64-test-cluster"
