@@ -441,6 +441,13 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 		return err
 	}
 
+	if !metricsEnabled {
+		// override, if !metricsEnabled then possibly bpffs not mounted and can't pin
+		// by name
+		spec.Maps["ip64_metrics"].Pinning = ebpf.PinNone
+		spec.Maps["ip46_metrics"].Pinning = ebpf.PinNone
+	}
+
 	for _, prog := range spec.Programs {
 		klog.Infof("eBPF program spec section %s name %s", prog.SectionName, prog.Name)
 	}
