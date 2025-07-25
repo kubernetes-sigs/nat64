@@ -338,17 +338,17 @@ func main() {
 		Ip46map := LoadMap("ip46_metrics")
 
 		defer func() {
-		        if Ip64map != nil {
-			  err = Ip64map.Close()
-			  if err != nil {
-				  klog.Infof("error closing map object")
-			  }
+			if Ip64map != nil {
+				err = Ip64map.Close()
+				if err != nil {
+					klog.Infof("error closing map object")
+				}
 			}
-		        if Ip64map != nil {
-			  err = Ip64map.Close()
-			  if err != nil {
-				  klog.Infof("error closing map object")
-			  }
+			if Ip64map != nil {
+				err = Ip64map.Close()
+				if err != nil {
+					klog.Infof("error closing map object")
+				}
 			}
 		}()
 
@@ -439,6 +439,13 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	spec, err := ebpf.LoadCollectionSpec(bpfProgram)
 	if err != nil {
 		return err
+	}
+
+	if !metricsEnabled {
+		// override, if !metricsEnabled then possibly bpffs not mounted and can't pin
+		// by name
+		spec.Maps["ip64_metrics"].Pinning = ebpf.PinNone
+		spec.Maps["ip46_metrics"].Pinning = ebpf.PinNone
 	}
 
 	for _, prog := range spec.Programs {
