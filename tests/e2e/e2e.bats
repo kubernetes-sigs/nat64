@@ -170,7 +170,6 @@
 
   kubectl wait --for=condition=ready pod/test-bpfmap1 --timeout=30s
   kubectl exec -i test-bpfmap1 -- sh -c "
-    apt-get update > /dev/null
     ping -c 7 64:ff9b::$ip_address >&2
   "
   #gather metrics before the second ping
@@ -182,7 +181,6 @@
       --restart=Never \
       --command \
       -- sh -c "
-  apt-get update >/dev/null 2>&1
   sleep 20
   get_icmp6_count() {
     curl --silent localhost:8881/metrics | grep protocol=\\\"ICMPv6\\\" | cut -d ' ' -f2
@@ -205,7 +203,6 @@
         --restart=Never \
         --command \
         -- sh -c "
-    apt-get update >/dev/null 2>&1
     get_icmp6_count() {
       curl --silent localhost:8881/metrics | grep protocol=\\\"ICMPv6\\\" | cut -d ' ' -f2
     }
