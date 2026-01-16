@@ -24,7 +24,7 @@ jobs:
     name: Bats e2e tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2
       - name: Enable ICMP
         shell: bash
         run: |
@@ -32,7 +32,7 @@ jobs:
           sudo sysctl -p
       - name: Setup Bats and bats libs
         id: setup-bats
-        uses: bats-core/bats-action@3.0.0
+        uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db # 3.0.0
       - name: Bats tests
         shell: bash
         env:
@@ -42,7 +42,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kind-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
           path: ./_artifacts
@@ -52,10 +52,10 @@ jobs:
     name: Bats integrations tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2
       - name: Setup Bats and bats libs
         id: setup-bats
-        uses: bats-core/bats-action@3.0.0
+        uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db # 3.0.0
       - name: Set up environment
         shell: bash
         run: |
@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: integration-logs-${{ env.JOB_NAME }}-${{ github.run_id }}
           path: ./_artifacts
