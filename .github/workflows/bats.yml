@@ -24,7 +24,7 @@ jobs:
     name: Bats e2e tests
     steps:
       - name: Checkout
-        uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v2
       - name: Enable ICMP
         shell: bash
         run: |
@@ -52,7 +52,7 @@ jobs:
     name: Bats integrations tests
     steps:
       - name: Checkout
-        uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v2
       - name: Setup Bats and bats libs
         id: setup-bats
         uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db # 3.0.0

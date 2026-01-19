@@ -30,7 +30,7 @@ jobs:
       id: go
 
     - name: Check out code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
 
     - name: Build
       run: |
@@ -53,7 +53,7 @@ jobs:
       JOB_NAME: "nat64-e2e"
     steps:
     - name: Check out code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
 
     - name: Enable ipv4 and ipv6 forwarding
       run: |
