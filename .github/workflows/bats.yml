@@ -32,7 +32,7 @@ jobs:
           sudo sysctl -p
       - name: Setup Bats and bats libs
         id: setup-bats
-        uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db # 3.0.0
+        uses: bats-core/bats-action@42fcc8700f773c075a16a90eb11674c0318ad507 # 3.0.1
       - name: Bats tests
         shell: bash
         env:
@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2
       - name: Setup Bats and bats libs
         id: setup-bats
-        uses: bats-core/bats-action@2104b40bb7b6c2d5110b23a26b0bf265ab8027db # 3.0.0
+        uses: bats-core/bats-action@42fcc8700f773c075a16a90eb11674c0318ad507 # 3.0.1
       - name: Set up environment
         shell: bash
         run: |
