@@ -14,7 +14,7 @@
 
 ARG GOARCH="amd64"
 
-FROM ubuntu:22.04 AS ebpf-builder
+FROM ubuntu:24.04 AS ebpf-builder
 WORKDIR /go/src/app
 RUN apt-get update && apt-get -y install clang llvm
 COPY ./bpf ./bpf
