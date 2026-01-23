@@ -59,7 +59,7 @@ spec:
       serviceAccountName: nat64
       containers:
       - name: nat64
-        image: registry.k8s.io/networking/nat64:v0.2.1
+        image: registry.k8s.io/networking/nat64:v0.4.1
         args:
         - "/nat64"
         - "--hostname=$(NODE_NAME)"
