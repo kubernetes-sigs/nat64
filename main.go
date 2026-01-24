@@ -451,8 +451,7 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 	for _, prog := range spec.Programs {
 		klog.Infof("eBPF program spec section %s name %s", prog.SectionName, prog.Name)
 	}
-
-	err = spec.RewriteConstants(map[string]interface{}{
+	config := map[string]interface{}{
 		// This is the range that is used to replace the original
 		// IPv6 address, so it can be masquerade later with the
 		// external IPv4 address.
@@ -480,9 +479,14 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 		"POD_MASK_1": binary.BigEndian.Uint32(podIPNet.Mask[4:8]),
 		"POD_MASK_2": binary.BigEndian.Uint32(podIPNet.Mask[8:12]),
 		"POD_MASK_3": binary.BigEndian.Uint32(podIPNet.Mask[12:16]),
-	})
-	if err != nil {
-		return fmt.Errorf("unexpected error rewriting eBPF program: %w", err)
+	}
+
+	for field, value := range config {
+		if v, ok := spec.Variables[field]; ok {
+			if err := v.Set(value); err != nil {
+				return fmt.Errorf("failed to set eBPF value %s: %w", field, err)
+			}
+		}
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
