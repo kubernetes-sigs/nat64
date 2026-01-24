@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: "1.23"
+  GO_VERSION: "1.25"
   K8S_VERSION: "v1.32.0"
-  KIND_VERSION: "v0.26.0"
+  KIND_VERSION: "v0.31.0"
   REGISTRY: registry.k8s.io
   IMAGE_NAME: networking/nat64
   KIND_CLUSTER_NAME: kind
