@@ -3,7 +3,7 @@ module sigs.k8s.io/nat64
 go 1.25.6
 
 require (
-	github.com/cilium/ebpf v0.13.0
+	github.com/cilium/ebpf v0.17.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/nftables v0.3.0
 	github.com/moby/sys/mountinfo v0.7.2
@@ -46,7 +46,6 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
