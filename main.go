@@ -482,10 +482,14 @@ func syncInterface(v4net, v6net, podIPNet *net.IPNet) error {
 		"POD_MASK_2": binary.BigEndian.Uint32(podIPNet.Mask[8:12]),
 		"POD_MASK_3": binary.BigEndian.Uint32(podIPNet.Mask[12:16]),
 	}
+	var errs []error
 	for name, value := range constants {
 		if err := spec.Variables[name].Set(value); err != nil {
-			return fmt.Errorf("failed to set eBPF constant %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("failed to set eBPF constant %s: %w", name, err))
 		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
 	}
 
 	// Instantiate a Collection from a CollectionSpec.
