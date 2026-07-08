@@ -43,7 +43,7 @@ test:
 	go test -v -count 1 -race ./...
 
 lint:
-	hack/lint.sh
+	go tool golangci-lint run
 
 # get image name from directory we're building
 IMAGE_NAME=nat64
