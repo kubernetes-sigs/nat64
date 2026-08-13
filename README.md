@@ -40,6 +40,139 @@ have to use in KIND](https://github.com/kubernetes-sigs/kind/blob/7c2f6c1dcd332c
 
 We can just forward requests to [a public DNS64 server](https://developers.google.com/speed/public-dns/docs/dns64), also CoreDNS has a [DNS64 plugin](https://coredns.io/plugins/dns64/)
 
+#### CoreDNS configuration
+
+If you use [CoreDNS's `dns64` plugin](https://coredns.io/plugins/dns64/)
+to provide DNS64 alongside the NAT64 translation this agent performs, some
+`dns64` configurations produce surprising results when combined with the
+in-cluster Kubernetes DNS.
+
+##### Known issue: `translate_all` breaks in-cluster DNS
+
+**Symptom:** with `dns64` enabled and its `translate_all` option set, external
+DNS64 lookups work correctly, but in-cluster Service DNS stops resolving
+entirely. This has been reported and confirmed upstream:
+[coredns/coredns#7246](https://github.com/coredns/coredns/issues/7246).
+
+**Reproducing it:**
+
+1. Create an IPv6-only kind cluster:
+
+```yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+nodes:
+- role: control-plane
+- role: worker
+```
+
+2. Install nat64 (see [Install](#install) above) so CoreDNS pods have
+   internet access.
+
+3. Patch the `coredns` ConfigMap to add a `dns64` block with `translate_all`
+   enabled, and point `forward` at a DNS64-capable resolver:
+
+```corefile
+.:53 {
+    errors
+    health
+    dns64 {
+        translate_all
+    }
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    forward . [64:ff9b::8.8.8.8]:53
+    cache 30
+    loop
+    reload
+    loadbalance
+}
+```
+
+4. Restart the `coredns` Deployment and query from a test pod:
+
+```console
+$ nslookup kubernetes
+Server:         fd00:10:96::a
+Address:        fd00:10:96::a#53
+
+*** Can't find kubernetes.default.svc.cluster.local: No answer
+```
+
+   In-cluster names no longer resolve, even though external DNS64 lookups
+   (e.g. `nslookup www.google.es`) succeed.
+
+**Why this happens:** `translate_all` causes the `dns64` plugin to rewrite
+*every* query result, including the `A`/`AAAA` records the `kubernetes`
+plugin returns for in-cluster Services. Once those responses are rewritten,
+the client no longer receives the addresses the `kubernetes` plugin actually
+generated, and in-cluster resolution breaks.
+
+##### Recommended configuration
+
+Do not enable `translate_all` on a Corefile that also serves in-cluster
+Kubernetes DNS. Instead, scope `dns64` translation to non-cluster domains
+only, and let the `kubernetes` plugin handle `cluster.local` (and the reverse
+zones) before `dns64` ever sees those queries:
+
+```corefile
+.:53 {
+    errors
+    health
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    dns64 {
+        prefix 64:ff9b::/96
+    }
+    forward . [64:ff9b::8.8.8.8]:53
+    cache 30
+    loop
+    reload
+    loadbalance
+}
+```
+
+Key points:
+
+- Keep the `kubernetes` plugin block **before** `dns64` in the plugin chain,
+  so cluster Service lookups are answered first and never passed to `dns64`
+  for rewriting.
+- Omit `translate_all` unless you have confirmed it does not affect your
+  in-cluster DNS. Without it, `dns64` only synthesizes `AAAA` records when no
+  real `AAAA` exists — the normal, non-breaking DNS64 behavior — and leaves
+  cluster-local answers untouched.
+- If you do need `translate_all` for some external zones, split it into a
+  separate server block scoped to only those zones, rather than the default
+  `.:53` block that also serves `cluster.local`.
+
+##### Verifying your configuration
+
+After applying a Corefile, confirm both paths work from a test pod:
+
+```console
+# In-cluster DNS should resolve normally
+$ nslookup kubernetes
+...
+Name:   kubernetes.default.svc.cluster.local
+Address: fd00:10:96::1
+
+# External DNS64 should still synthesize an address
+$ nslookup www.google.es
+...
+Name:   www.google.es
+Address: 64:ff9b::acd9:da5e
+```
+
+If the in-cluster lookup fails while the external one succeeds, revisit your
+Corefile for a `translate_all` setting applied to the same server block that
+handles `cluster.local`.
+
 ### NAT64
 
 This is more tricky, one of the common solutions is to use an external gateway to perform NAT64, but that requires additional infrastructure and probable more cost and complexity, and is hard to implement on CI systems with [KIND](https://kind.sigs.k8s.io/) that run
