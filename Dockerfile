@@ -21,7 +21,7 @@ RUN clang -target bpf -I ./bpf/include -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.
 
 # Cross-compile from the build platform; Go does this natively with CGO disabled,
 # so no qemu emulation is needed for the target architecture.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27 AS builder
 # Set by buildx for each --platform entry.
 ARG TARGETOS
 ARG TARGETARCH
