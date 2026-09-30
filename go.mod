@@ -1,6 +1,6 @@
 module sigs.k8s.io/nat64
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/cilium/ebpf v0.22.0
