@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG GOARCH="amd64"
-
 FROM ubuntu:26.04 AS ebpf-builder
 WORKDIR /go/src/app
 RUN apt-get update && apt-get -y install clang llvm
@@ -21,16 +19,18 @@ COPY ./bpf ./bpf
 # TODO: make it so that we only build this in Makefile and just copy object files here
 RUN clang -target bpf -I ./bpf/include -g -Wall -O2 -c bpf/nat64.c -o bpf/nat64.o
 
-FROM golang:1.26 AS builder
-# golang envs
-ARG GOARCH="amd64"
-ARG GOOS=linux
-ENV CGO_ENABLED=0
+# Cross-compile from the build platform; Go does this natively with CGO disabled,
+# so no qemu emulation is needed for the target architecture.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+# Set by buildx for each --platform entry.
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}
 
 WORKDIR /go/src/app
 COPY ./main.go ./metrics.go ./go.mod ./go.sum ./
 RUN go mod download
-RUN CGO_ENABLED=0 go build -o /go/bin/nat64 .
+RUN go build -o /go/bin/nat64 .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=ebpf-builder --chown=root:root /go/src/app/bpf/nat64.o /bpf/nat64.o
