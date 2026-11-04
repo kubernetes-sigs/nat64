@@ -338,17 +338,17 @@ func main() {
 		Ip46map := LoadMap("ip46_metrics")
 
 		defer func() {
-		        if Ip64map != nil {
-			  err = Ip64map.Close()
-			  if err != nil {
-				  klog.Infof("error closing map object")
-			  }
+			if Ip64map != nil {
+				err = Ip64map.Close()
+				if err != nil {
+					klog.Infof("error closing map object")
+				}
 			}
-		        if Ip64map != nil {
-			  err = Ip64map.Close()
-			  if err != nil {
-				  klog.Infof("error closing map object")
-			  }
+			if Ip64map != nil {
+				err = Ip64map.Close()
+				if err != nil {
+					klog.Infof("error closing map object")
+				}
 			}
 		}()
 
@@ -786,11 +786,11 @@ func waitForPodCIDR(ctx context.Context, client clientset.Interface, nodeName st
 
 	fieldSelector := fields.OneTermEqualSelector("metadata.name", nodeName).String()
 	lw := &cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (object runtime.Object, e error) {
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (object runtime.Object, e error) {
 			options.FieldSelector = fieldSelector
 			return client.CoreV1().Nodes().List(ctx, options)
 		},
-		WatchFunc: func(options metav1.ListOptions) (i watch.Interface, e error) {
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (i watch.Interface, e error) {
 			options.FieldSelector = fieldSelector
 			return client.CoreV1().Nodes().Watch(ctx, options)
 		},
